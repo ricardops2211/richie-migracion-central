@@ -78,31 +78,33 @@ jobs:
       - name: Checkout repo migrator
         uses: actions/checkout@v4
 
-      - name: Clonar repo objetivo
+      - name: Clonar repo objetivo (auto-detect branch)
         run: |
-          echo "Clonando ${{ matrix.config.repo }}..."
-          git clone --depth 1 --branch ${{ matrix.config.branch }} \
-            https://github.com/${{ matrix.config.repo }} target-repo
+          REPO="${{ matrix.config.repo }}"
+          REQUESTED_BRANCH="${{ matrix.config.branch }}"
 
-      - name: Detectar archivos a migrar
-        id: detect-files
-        run: |
-          cd target-repo
-          TYPE="${{ matrix.config.type }}"
+          echo "Intentando clonar rama: $REQUESTED_BRANCH"
 
-          if [ "$TYPE" = "jenkins" ]; then
-            FILES=$(find . -type f \( -name "Jenkinsfile*" -o -name "*.groovy" \))
-          elif [ "$TYPE" = "azure" ]; then
-            FILES=$(find . -type f -name "azure-pipelines*.yml")
+          # Verificar si la rama existe remotamente
+          if git ls-remote --heads https://github.com/$REPO $REQUESTED_BRANCH | grep -q $REQUESTED_BRANCH; then
+            BRANCH_TO_USE=$REQUESTED_BRANCH
+            echo "Rama encontrada: $BRANCH_TO_USE"
           else
-            FILES=""
+            echo "Rama $REQUESTED_BRANCH no existe. Detectando default branch..."
+
+            DEFAULT_BRANCH=$(git ls-remote --symref https://github.com/$REPO HEAD \
+              | grep 'ref:' \
+              | sed 's#.*/##')
+
+            echo "Default branch detectada: $DEFAULT_BRANCH"
+            BRANCH_TO_USE=$DEFAULT_BRANCH
           fi
 
-          echo "Archivos encontrados:"
-          echo "$FILES"
+          git clone --depth 1 --branch $BRANCH_TO_USE \
+            https://github.com/$REPO target-repo
 
-          FILES=$(echo "$FILES" | tr '\n' ' ')
-          echo "FILES_TO_MIGRATE=$FILES" >> $GITHUB_OUTPUT
+          echo "BRANCH_USADA=$BRANCH_TO_USE" >> $GITHUB_ENV
+
 
       - name: Ejecutar migración con IA
         if: ${{ steps.detect-files.outputs.FILES_TO_MIGRATE != '' }}
