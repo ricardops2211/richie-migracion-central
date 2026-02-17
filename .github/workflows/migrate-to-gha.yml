@@ -1,0 +1,100 @@
+name: Migración Automatizada a GitHub Actions (con IA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      config_file:
+        description: 'Archivo JSON con lista de repos'
+        default: 'repos-config.json'
+      max_parallel:
+        description: 'Máximo jobs paralelos'
+        default: '5'
+      openai_model:
+        description: 'Modelo OpenAI'
+        default: 'gpt-4o'
+
+permissions:
+  contents: read
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: build
+        run: |
+          MATRIX=$(jq -r '
+            .[] 
+            | (.branches // [.branch // "main"]) as $b
+            | $b[]
+            | {
+                repo: .repo,
+                branch: .,
+                shared_lib_path: (.shared_lib_path // "vars/"),
+                jenkins_path: (.jenkins_path // "Jenkinsfile"),
+                type: (.type // "jenkins")
+              }
+            | @json
+          ' "${{ inputs.config_file }}" | jq -s -c 'map(.)')
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  migrate:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJson(inputs.max_parallel) }}
+      matrix:
+        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout repositorio origen
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.config.repo }}
+          ref: ${{ matrix.config.branch }}
+          path: source-repo
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Buscar archivos relevantes
+        id: find-files
+        run: |
+          cd source-repo
+          FILES=$(find . -type f \
+            \( -name "*.groovy" \
+            -o -name "Jenkinsfile*" \
+            -o -name "*.yml" \
+            -o -name "*.yaml" \) \
+            -path "*${{ matrix.config.shared_lib_path }}*" \
+            -o -path "*${{ matrix.config.jenkins_path }}*" \
+            | tr '\n' ' ')
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+
+      - name: Preparar script de migración
+        run: |
+          mkdir -p scripts
+          cat > scripts/migrate-with-ai.sh << 'EOF'
+          # Aquí pega TODO el contenido del migrate-with-ai.sh que te di arriba
+          # (copia desde #!/usr/bin/env bash hasta el final)
+          EOF
+          chmod +x scripts/migrate-with-ai.sh
+
+      - name: Transformar con IA (script separado)
+        if: steps.find-files.outputs.files != ''
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ inputs.openai_model }}
+          REPO_NAME: ${{ matrix.config.repo }}
+          BRANCH_NAME: ${{ matrix.config.branch }}
+          FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
+          TYPE: ${{ matrix.config.type }}
+        run: ./scripts/migrate-with-ai.sh
+
+      - name: Subir resultados como Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
+          path: migrated/**
+          retention-days: 7
