@@ -1,4 +1,4 @@
-name: AI Multi-Repo Migration
+name: AI Multi-Repo Migrations
 
 on:
   push:
