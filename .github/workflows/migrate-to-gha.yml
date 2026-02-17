@@ -10,28 +10,37 @@ permissions:
   contents: read
 
 jobs:
-  generate-matrix:
+  debug-and-generate-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build.outputs.matrix || '[]' }}
+      matrix: ${{ steps.build-matrix.outputs.matrix || '[]' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verificar y mostrar JSON
+      - name: Verificar rama y archivos en raíz
+        run: |
+          pwd
+          ls -la
+          git branch --show-current
+          git log -1 --oneline
+
+      - name: Mostrar si repos-config.json existe
         run: |
           if [ -f repos-config.json ]; then
-            echo "JSON encontrado:"
+            echo "JSON ENCONTRADO"
             cat repos-config.json
           else
-            echo "ERROR: repos-config.json NO existe en la raíz"
+            echo "ERROR: repos-config.json NO EXISTE en la raíz"
+            ls -la
             exit 1
           fi
 
-      - name: Construir matrix con depuración
-        id: build
+      - name: Validar JSON y construir matrix
+        id: build-matrix
         run: |
-          echo "Parseando JSON..."
-          MATRIX=$(jq -r '
+          echo "Intentando parsear repos-config.json..."
+
+          RAW_OUTPUT=$(jq -r '
             .[] 
             | (.branches // [.branch // "main"]) as $b
             | $b[]
@@ -43,67 +52,30 @@ jobs:
                 type: (.type // "jenkins")
               }
             | @json
-          ' repos-config.json 2>&1 || echo "[]")
+          ' repos-config.json 2>&1)
 
-          echo "Resultado crudo de jq:"
-          echo "$MATRIX"
+          echo "Salida cruda de jq:"
+          echo "$RAW_OUTPUT"
 
-          MATRIX_CLEAN=$(echo "$MATRIX" | jq -s -c 'map(select(. != null))' || echo "[]")
-          echo "matrix=$MATRIX_CLEAN" >> $GITHUB_OUTPUT
+          MATRIX=$(echo "$RAW_OUTPUT" | jq -s -c 'map(select(. != null))' 2>&1 || echo "[]")
 
-          if [ "$MATRIX_CLEAN" = "[]" ]; then
-            echo "¡Matrix vacía! Revisa repos-config.json"
-          else
-            echo "Matrix generada con $(echo "$MATRIX_CLEAN" | jq length) entradas"
-          fi
+          echo "Matrix final:"
+          echo "$MATRIX" | jq . || echo "Matrix inválida o vacía"
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   migrate:
-    needs: generate-matrix
+    needs: debug-and-generate-matrix
     runs-on: ubuntu-latest
-    if: ${{ fromJson(needs.generate-matrix.outputs.matrix) != '[]' }}
+    if: ${{ fromJson(needs.debug-and-generate-matrix.outputs.matrix) != '[]' }}
     strategy:
       fail-fast: false
       max-parallel: 5
       matrix:
-        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        config: ${{ fromJson(needs.debug-and-generate-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout repositorio origen
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ matrix.config.repo }}
-          ref: ${{ matrix.config.branch }}
-          path: source-repo
-          token: ${{ secrets.GH_PAT }}
+      - run: echo "Entrando en migración para repo ${{ matrix.config.repo }} rama ${{ matrix.config.branch }}"
 
-      - name: Buscar archivos relevantes
-        id: find-files
-        run: |
-          cd source-repo
-          FILES=$(find . -type f \
-            \( -name "*.groovy" \
-            -o -name "Jenkinsfile*" \
-            -o -name "*.yml" \
-            -o -name "*.yaml" \) \
-            -path "*${{ matrix.config.shared_lib_path }}*" \
-            -o -path "*${{ matrix.config.jenkins_path }}*" \
-            | tr '\n' ' ')
-          echo "files=$FILES" >> $GITHUB_OUTPUT
-
-      - name: Ejecutar script de migración con IA
-        if: steps.find-files.outputs.files != ''
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: gpt-4o
-          REPO_NAME: ${{ matrix.config.repo }}
-          BRANCH_NAME: ${{ matrix.config.branch }}
-          FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
-          TYPE: ${{ matrix.config.type }}
-        run: ./scripts/migrate-with-ai.sh
-
-      - name: Subir como Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
-          path: migrated/**
-          retention-days: 7
+      # Aquí puedes pegar tus pasos originales (checkout, find-files, script IA, artifacts)
+      # Por ahora lo dejo mínimo para depurar el matrix
+      - run: echo "Job ejecutado correctamente"
