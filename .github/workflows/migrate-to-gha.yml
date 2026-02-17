@@ -2,118 +2,147 @@ name: Migración Automatizada a GitHub Actions (con IA)
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  debug-and-generate-matrix:
+  generate-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.build.outputs.matrix }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verificar archivos en raíz
+      - name: Validar JSON y construir matrix
+        id: build
         run: |
-          pwd
-          ls -la
-          git branch --show-current
-          git log -1 --oneline
-
-      - name: Validar existencia de repos-config.json
-        run: |
-          if [ ! -f repos-config.json ]; then
-            echo "ERROR: repos-config.json NO EXISTE"
-            exit 1
-          fi
-          cat repos-config.json
-
-      - name: Construir matrix
-        id: build-matrix
-        run: |
-          echo "Validando JSON..."
-
           if ! jq empty repos-config.json; then
             echo "JSON inválido"
             echo "matrix=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          RAW_OUTPUT=$(jq -c '
+          RAW=$(jq -c '
             .[] as $repo
-            | ($repo.branches // [$repo.branch // "main"]) as $branches
+            | ($repo.branches // [$repo.branch // ""]) as $branches
             | $branches[]
             | {
                 repo: $repo.repo,
                 branch: .,
-                shared_lib_path: ($repo.shared_lib_path // "vars/"),
-                jenkins_path: ($repo.jenkins_path // "Jenkinsfile"),
+                shared_lib_path: ($repo.shared_lib_path // ""),
+                jenkins_path: ($repo.jenkins_path // ""),
                 type: ($repo.type // "jenkins")
               }
           ' repos-config.json)
 
-          MATRIX=$(echo "$RAW_OUTPUT" | jq -s -c '.')
-
-          echo "Matrix generada:"
+          MATRIX=$(echo "$RAW" | jq -s -c '.')
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           echo "$MATRIX" | jq .
 
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-
   migrate:
-    needs: debug-and-generate-matrix
+    needs: generate-matrix
     runs-on: ubuntu-latest
-    if: ${{ needs.debug-and-generate-matrix.outputs.matrix != '[]' }}
+    if: ${{ needs.generate-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       max-parallel: 3
       matrix:
-        config: ${{ fromJson(needs.debug-and-generate-matrix.outputs.matrix) }}
+        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
 
     steps:
-      - name: Checkout repo migrator
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Clonar repo objetivo (auto-detect branch)
+      # ─────────────────────────────────────────────
+      # CLONAR REPO (auto-detect branch si no existe)
+      # ─────────────────────────────────────────────
+      - name: Clonar repo objetivo
         run: |
           REPO="${{ matrix.config.repo }}"
           REQUESTED_BRANCH="${{ matrix.config.branch }}"
 
-          echo "Intentando clonar rama: $REQUESTED_BRANCH"
-
-          # Verificar si la rama existe remotamente
-          if git ls-remote --heads https://github.com/$REPO $REQUESTED_BRANCH | grep -q $REQUESTED_BRANCH; then
-            BRANCH_TO_USE=$REQUESTED_BRANCH
-            echo "Rama encontrada: $BRANCH_TO_USE"
+          if [ -n "$REQUESTED_BRANCH" ] && \
+             git ls-remote --heads https://github.com/$REPO $REQUESTED_BRANCH | grep -q $REQUESTED_BRANCH; then
+            BRANCH=$REQUESTED_BRANCH
           else
-            echo "Rama $REQUESTED_BRANCH no existe. Detectando default branch..."
-
-            DEFAULT_BRANCH=$(git ls-remote --symref https://github.com/$REPO HEAD \
-              | grep 'ref:' \
-              | sed 's#.*/##')
-
-            echo "Default branch detectada: $DEFAULT_BRANCH"
-            BRANCH_TO_USE=$DEFAULT_BRANCH
+            BRANCH=$(git ls-remote --symref https://github.com/$REPO HEAD \
+              | awk '/^ref:/ {sub(/refs\/heads\//,"",$2); print $2}')
           fi
 
-          git clone --depth 1 --branch $BRANCH_TO_USE \
+          echo "Usando rama: $BRANCH"
+          git clone --depth 1 --branch $BRANCH \
             https://github.com/$REPO target-repo
 
-          echo "BRANCH_USADA=$BRANCH_TO_USE" >> $GITHUB_ENV
+          echo "REAL_BRANCH=$BRANCH" >> $GITHUB_ENV
 
+      # ─────────────────────────────────────────────
+      # DETECTAR ARCHIVOS SEGÚN ESTRUCTURA REAL
+      # ─────────────────────────────────────────────
+      - name: Detectar archivos a migrar
+        id: detect
+        run: |
+          cd target-repo
 
+          TYPE="${{ matrix.config.type }}"
+          SHARED="${{ matrix.config.shared_lib_path }}"
+          JENKINS="${{ matrix.config.jenkins_path }}"
+
+          FILES=""
+
+          if [ "$TYPE" = "jenkins" ]; then
+
+            if [ -d "$SHARED" ]; then
+              FILES="$FILES $(find $SHARED -type f -name '*.groovy')"
+            fi
+
+            if [ -d "src" ]; then
+              FILES="$FILES $(find src -type f -name '*.groovy')"
+            fi
+
+            if [ -f "$JENKINS" ]; then
+              FILES="$FILES $JENKINS"
+            fi
+
+          elif [ "$TYPE" = "azure" ]; then
+
+            if [ -d "$SHARED" ]; then
+              FILES="$FILES $(find $SHARED -type f -name '*.yml')"
+            fi
+
+            if [ -f "azure-pipelines.yml" ]; then
+              FILES="$FILES azure-pipelines.yml"
+            fi
+
+            if [ -f "azure-pipelines-example.yml" ]; then
+              FILES="$FILES azure-pipelines-example.yml"
+            fi
+          fi
+
+          FILES=$(echo "$FILES" | tr '\n' ' ' | xargs)
+
+          if [ -z "$FILES" ]; then
+            echo "files=" >> $GITHUB_OUTPUT
+            echo "No se encontraron archivos."
+          else
+            echo "Archivos detectados:"
+            echo "$FILES"
+            echo "files=$FILES" >> $GITHUB_OUTPUT
+          fi
+
+      # ─────────────────────────────────────────────
+      # EJECUTAR MIGRACIÓN IA
+      # ─────────────────────────────────────────────
       - name: Ejecutar migración con IA
-        if: ${{ steps.detect-files.outputs.FILES_TO_MIGRATE != '' }}
+        if: ${{ steps.detect.outputs.files != '' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: gpt-4o
           REPO_NAME: ${{ matrix.config.repo }}
-          BRANCH_NAME: ${{ matrix.config.branch }}
-          FILES_TO_MIGRATE: ${{ steps.detect-files.outputs.FILES_TO_MIGRATE }}
+          BRANCH_NAME: ${{ env.REAL_BRANCH }}
+          FILES_TO_MIGRATE: ${{ steps.detect.outputs.files }}
           TYPE: ${{ matrix.config.type }}
         run: |
           chmod +x scripts/migrate-with-ai.sh
@@ -123,5 +152,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
+          name: migrated-${{ matrix.config.repo }}
           path: migrated/
