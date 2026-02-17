@@ -5,7 +5,14 @@
     "shared_lib_path": "vars/",
     "jenkins_path": "Jenkinsfile-example",
     "type": "jenkins",
-    "description": "Jenkins personal"
+    "description": "Tu propia librería Jenkins"
+  },
+  {
+    "repo": "boozallen/sdp-libraries",
+    "branch": "main",
+    "shared_lib_path": "vars/",
+    "type": "jenkins",
+    "description": "Librería pública grande y activa (Booz Allen) con muchas funciones Groovy"
   },
   {
     "repo": "ricardops2211/richie-azure-devops-templates",
@@ -13,6 +20,6 @@
     "shared_lib_path": "templates/",
     "jenkins_path": "azure-pipelines.yml",
     "type": "azure",
-    "description": "Azure DevOps"
+    "description": "Tu propio repo de templates Azure DevOps"
   }
 ]
