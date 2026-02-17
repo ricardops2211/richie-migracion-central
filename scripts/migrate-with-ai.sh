@@ -6,34 +6,34 @@ set -euo pipefail
 # Transforma archivos Groovy/Jenkins/Azure a GitHub Actions YAML usando OpenAI
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Variables de entorno esperadas (inyectadas por GitHub Actions)
-: "${OPENAI_API_KEY:?Falta OPENAI_API_KEY}"
+# Variables requeridas (inyectadas por GitHub Actions)
+: "${OPENAI_API_KEY:?ERROR: falta OPENAI_API_KEY}"
 : "${OPENAI_MODEL:=gpt-4o}"
-: "${REPO_NAME:?Falta REPO_NAME}"
-: "${BRANCH_NAME:?Falta BRANCH_NAME}"
-: "${FILES_TO_MIGRATE:?Falta FILES_TO_MIGRATE}"
-: "${TYPE:?Falta TYPE (jenkins/azure)}"
+: "${REPO_NAME:?ERROR: falta REPO_NAME}"
+: "${BRANCH_NAME:?ERROR: falta BRANCH_NAME}"
+: "${FILES_TO_MIGRATE:?ERROR: falta FILES_TO_MIGRATE}"
+: "${TYPE:?ERROR: falta TYPE (jenkins/azure)}"
 
 OUTPUT_BASE="migrated/${REPO_NAME}/${BRANCH_NAME}"
-
 mkdir -p "$OUTPUT_BASE"
 
-echo "Procesando ${#FILES_TO_MIGRATE[@]} archivos para ${REPO_NAME}@${BRANCH_NAME}"
+echo "Iniciando migración IA para ${REPO_NAME}@${BRANCH_NAME}"
+echo "Archivos a procesar: $FILES_TO_MIGRATE"
 
 for file in $FILES_TO_MIGRATE; do
   rel_path="${file#./}"
-  echo "→ Procesando: $rel_path"
+  echo "Procesando archivo: $rel_path"
 
   content=$(cat "$file" | jq -Rsa .)
 
-  prompt=$(cat <<EOF
-Eres un experto DevOps senior con 15+ años de experiencia migrando CI/CD.
+  prompt=$(cat <<'EOP'
+Eres un experto DevOps con +15 años de experiencia migrando CI/CD.
 
 Convierte este archivo completo (${rel_path}, tipo ${TYPE}) a GitHub Actions YAML moderno y robusto.
 
 Reglas estrictas:
 - Si es .groovy en vars/: genera Composite Action (.github/actions/nombre/action.yml) con inputs y steps equivalentes.
-- Si es clase en src/ (Groovy/Java): traduce lógica a steps run: bash o java -jar/class.
+- Si es clase en src/ (Groovy/Java): traduce lógica a steps run: bash o java.
 - Si es Jenkinsfile o azure-pipelines.yml: genera Reusable Workflow (.github/workflows/nombre.yml) con workflow_call, inputs, secrets: inherit.
 - Siempre incluye:
   - actions/cache para dependencias (maven, npm, nuget, etc.)
@@ -45,7 +45,7 @@ Reglas estrictas:
 
 Contenido del archivo:
 $content
-EOF
+EOP
   )
 
   response=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
@@ -66,13 +66,12 @@ EOF
     continue
   fi
 
-  # Limpiar nombre seguro
+  # Nombre seguro para carpeta
   safe_name=$(echo "$rel_path" | sed 's/[^a-zA-Z0-9._-]/_/g' | sed 's/__*/_/g' | sed 's/\.[^.]*$//')
-
   output_dir="$OUTPUT_BASE/$safe_name"
   mkdir -p "$output_dir"
 
-  # Dividir por --- y guardar cada sección como archivo .yml
+  # Dividir por --- y guardar cada parte como .yml
   echo "$generated" | csplit -f "part-" -n 2 -s '/^---$/' '{*}'
 
   i=1
@@ -89,5 +88,5 @@ EOF
 
 done
 
-echo "Transformación finalizada para ${REPO_NAME}@${BRANCH_NAME}"
-ls -R migrated/
+echo "Migración IA completada para ${REPO_NAME}@${BRANCH_NAME}"
+ls -R migrated/ || echo "No se generaron archivos"

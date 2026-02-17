@@ -1,17 +1,15 @@
 name: Migración Automatizada a GitHub Actions (con IA)
 
 on:
-  workflow_dispatch:
-    inputs:
-      config_file:
-        description: 'Archivo JSON con lista de repos'
-        default: 'repos-config.json'
-      max_parallel:
-        description: 'Máximo jobs paralelos'
-        default: '5'
-      openai_model:
-        description: 'Modelo OpenAI'
-        default: 'gpt-4o'
+  push:
+    branches:
+      - main
+    paths:
+      - 'repos-config.json'
+      - '.github/workflows/migrate-to-gha.yaml'
+      - 'scripts/migrate-with-ai.sh'
+
+  workflow_dispatch:  # permite ejecución manual también
 
 permissions:
   contents: read
@@ -23,7 +21,9 @@ jobs:
       matrix: ${{ steps.build.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-      - id: build
+
+      - name: Construir matrix desde JSON
+        id: build
         run: |
           MATRIX=$(jq -r '
             .[] 
@@ -37,7 +37,7 @@ jobs:
                 type: (.type // "jenkins")
               }
             | @json
-          ' "${{ inputs.config_file }}" | jq -s -c 'map(.)')
+          ' "${{ github.workspace }}/${{ github.event.inputs.config_file || 'repos-config.json' }}" | jq -s -c 'map(.)')
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   migrate:
@@ -45,11 +45,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJson(inputs.max_parallel) }}
+      max-parallel: 5
       matrix:
         config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout repositorio origen
+      - name: Checkout repositorio origen (${{ matrix.config.repo }} @ ${{ matrix.config.branch }})
         uses: actions/checkout@v4
         with:
           repository: ${{ matrix.config.repo }}
@@ -71,30 +71,22 @@ jobs:
             | tr '\n' ' ')
           echo "files=$FILES" >> $GITHUB_OUTPUT
 
-      - name: Preparar script de migración
-        run: |
-          mkdir -p scripts
-          cat > scripts/migrate-with-ai.sh << 'EOF'
-          # Aquí pega TODO el contenido del migrate-with-ai.sh que te di arriba
-          # (copia desde #!/usr/bin/env bash hasta el final)
-          EOF
-          chmod +x scripts/migrate-with-ai.sh
-
-      - name: Transformar con IA (script separado)
+      - name: Ejecutar migración con IA (script separado)
         if: steps.find-files.outputs.files != ''
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ inputs.openai_model }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-4o' }}
           REPO_NAME: ${{ matrix.config.repo }}
           BRANCH_NAME: ${{ matrix.config.branch }}
           FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
           TYPE: ${{ matrix.config.type }}
         run: ./scripts/migrate-with-ai.sh
 
-      - name: Subir resultados como Artifacts
+      - name: Subir resultados como Artifacts (descargables)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
           path: migrated/**
+          if-no-files-found: warn
           retention-days: 7

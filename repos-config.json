@@ -1,21 +1,18 @@
 [
   {
-    "repo": "richie-jenkins-shared-lib",
+    "repo": "ricardops2211/richie-jenkins-shared-lib",
     "branches": ["main"],
     "shared_lib_path": "vars/",
     "jenkins_path": "Jenkinsfile-example",
-    "type": "jenkins"
+    "type": "jenkins",
+    "description": "Jenkins personal"
   },
   {
-    "repo": "techiescamp/jenkins-shared-library",
-    "branch": "master",
-    "shared_lib_path": "vars/",
-    "type": "jenkins"
-  },
-  {
-    "repo": "hmcts/azure-devops-templates",
-    "branch": "master",
+    "repo": "ricardops2211/richie-azure-devops-templates",
+    "branch": "main",
     "shared_lib_path": "templates/",
-    "type": "azure"
+    "jenkins_path": "azure-pipelines.yml",
+    "type": "azure",
+    "description": "Azure DevOps"
   }
 ]
