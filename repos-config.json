@@ -1,0 +1,21 @@
+[
+  {
+    "repo": "richie-jenkins-shared-lib",
+    "branches": ["main"],
+    "shared_lib_path": "vars/",
+    "jenkins_path": "Jenkinsfile-example",
+    "type": "jenkins"
+  },
+  {
+    "repo": "techiescamp/jenkins-shared-library",
+    "branch": "master",
+    "shared_lib_path": "vars/",
+    "type": "jenkins"
+  },
+  {
+    "repo": "hmcts/azure-devops-templates",
+    "branch": "master",
+    "shared_lib_path": "templates/",
+    "type": "azure"
+  }
+]
