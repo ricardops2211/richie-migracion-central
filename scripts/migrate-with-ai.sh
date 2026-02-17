@@ -10,20 +10,25 @@ if [ -z "$OPENAI_API_KEY" ]; then
   exit 1
 fi
 
+if [ ! -f "repos.json" ]; then
+  echo "❌ repos.json no encontrado en la raíz del repo"
+  exit 1
+fi
+
 rm -rf workspace migrated
 mkdir -p workspace migrated
 
 echo "🚀 Iniciando migración múltiple"
 
-repo_count=$(jq length repos-config.json)
+repo_count=$(jq length repos.json)
 
 for ((i=0; i<repo_count; i++)); do
 
-  repo=$(jq -r ".[$i].repo" repos-config.json)
-  branch=$(jq -r ".[$i].branch" repos-config.json)
-  shared_lib_path=$(jq -r ".[$i].shared_lib_path" repos-config.json)
-  jenkins_path=$(jq -r ".[$i].jenkins_path" repos-config.json)
-  type=$(jq -r ".[$i].type" repos-config.json)
+  repo=$(jq -r ".[$i].repo" repos.json)
+  branch=$(jq -r ".[$i].branch" repos.json)
+  shared_lib_path=$(jq -r ".[$i].shared_lib_path" repos.json)
+  jenkins_path=$(jq -r ".[$i].jenkins_path" repos.json)
+  type=$(jq -r ".[$i].type" repos.json)
 
   echo "------------------------------------------"
   echo "🔄 Procesando $repo ($type)"
@@ -88,12 +93,15 @@ $content"
       continue
     fi
 
-    output_dir="../../../migrated/$repo"
+    cd ../../
+    output_dir="migrated/$repo"
     mkdir -p "$output_dir"
 
     echo "$generated" > "$output_dir/$jenkins_path"
 
-    echo "✅ Guardado en migrated/$repo/$jenkins_path"
+    echo "✅ Guardado en $output_dir/$jenkins_path"
+
+    cd "workspace/$repo"
 
   done
 
