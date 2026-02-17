@@ -18,24 +18,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verificar rama y archivos en raíz
+      - name: Verificar archivos en raíz
         run: |
           pwd
           ls -la
           git branch --show-current
           git log -1 --oneline
 
-      - name: Mostrar si repos-config.json existe
+      - name: Validar existencia de repos-config.json
         run: |
-          if [ -f repos-config.json ]; then
-            echo "JSON ENCONTRADO"
-            cat repos-config.json
-          else
-            echo "ERROR: repos-config.json NO EXISTE en la raíz"
+          if [ ! -f repos-config.json ]; then
+            echo "ERROR: repos-config.json NO EXISTE"
             exit 1
           fi
+          cat repos-config.json
 
-      - name: Validar JSON y construir matrix
+      - name: Construir matrix
         id: build-matrix
         run: |
           echo "Validando JSON..."
@@ -45,8 +43,6 @@ jobs:
             echo "matrix=[]" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          echo "Construyendo matrix..."
 
           RAW_OUTPUT=$(jq -c '
             .[] as $repo
@@ -61,12 +57,9 @@ jobs:
               }
           ' repos-config.json)
 
-          echo "Salida cruda:"
-          echo "$RAW_OUTPUT"
-
           MATRIX=$(echo "$RAW_OUTPUT" | jq -s -c '.')
 
-          echo "Matrix final:"
+          echo "Matrix generada:"
           echo "$MATRIX" | jq .
 
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
@@ -77,17 +70,56 @@ jobs:
     if: ${{ needs.debug-and-generate-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 3
       matrix:
         config: ${{ fromJson(needs.debug-and-generate-matrix.outputs.matrix) }}
 
     steps:
-      - name: Mostrar configuración actual
-        run: |
-          echo "Repo: ${{ matrix.config.repo }}"
-          echo "Branch: ${{ matrix.config.branch }}"
-          echo "Shared Lib Path: ${{ matrix.config.shared_lib_path }}"
-          echo "Jenkins Path: ${{ matrix.config.jenkins_path }}"
-          echo "Type: ${{ matrix.config.type }}"
+      - name: Checkout repo migrator
+        uses: actions/checkout@v4
 
-      - run: echo "Job ejecutado correctamente"
+      - name: Clonar repo objetivo
+        run: |
+          echo "Clonando ${{ matrix.config.repo }}..."
+          git clone --depth 1 --branch ${{ matrix.config.branch }} \
+            https://github.com/${{ matrix.config.repo }} target-repo
+
+      - name: Detectar archivos a migrar
+        id: detect-files
+        run: |
+          cd target-repo
+          TYPE="${{ matrix.config.type }}"
+
+          if [ "$TYPE" = "jenkins" ]; then
+            FILES=$(find . -type f \( -name "Jenkinsfile*" -o -name "*.groovy" \))
+          elif [ "$TYPE" = "azure" ]; then
+            FILES=$(find . -type f -name "azure-pipelines*.yml")
+          else
+            FILES=""
+          fi
+
+          echo "Archivos encontrados:"
+          echo "$FILES"
+
+          FILES=$(echo "$FILES" | tr '\n' ' ')
+          echo "FILES_TO_MIGRATE=$FILES" >> $GITHUB_OUTPUT
+
+      - name: Ejecutar migración con IA
+        if: ${{ steps.detect-files.outputs.FILES_TO_MIGRATE != '' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-4o
+          REPO_NAME: ${{ matrix.config.repo }}
+          BRANCH_NAME: ${{ matrix.config.branch }}
+          FILES_TO_MIGRATE: ${{ steps.detect-files.outputs.FILES_TO_MIGRATE }}
+          TYPE: ${{ matrix.config.type }}
+        run: |
+          chmod +x scripts/migrate-with-ai.sh
+          ./scripts/migrate-with-ai.sh
+
+      - name: Subir resultados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
+          path: migrated/
