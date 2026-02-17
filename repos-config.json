@@ -1,7 +1,7 @@
 [
   {
     "repo": "ricardops2211/richie-jenkins-shared-lib",
-    "branch": "main",
+    "branch": "master",
     "shared_lib_path": "vars/",
     "jenkins_path": "Jenkinsfile-example",
     "type": "jenkins"
@@ -15,7 +15,7 @@
   },
   {
     "repo": "ricardops2211/richie-azure-devops-templates",
-    "branch": "main",
+    "branch": "master",
     "shared_lib_path": "templates/",
     "jenkins_path": "Jenkinsfile",
     "type": "azure"
