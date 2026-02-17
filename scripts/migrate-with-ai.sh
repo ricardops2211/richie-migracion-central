@@ -1,80 +1,123 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-: "${OPENAI_API_KEY:?}"
-: "${OPENAI_MODEL:=gpt-4o}"
-: "${REPO_NAME:?}"
-: "${BRANCH_NAME:?}"
-: "${FILES_TO_MIGRATE:?}"
-: "${TYPE:?}"
+set -e
 
-OUTPUT_BASE="migrated/${REPO_NAME}/${BRANCH_NAME}"
-mkdir -p "$OUTPUT_BASE"
+# ============================
+# CONFIG
+# ============================
 
-cd target-repo
+OPENAI_API_KEY=${OPENAI_API_KEY}
+OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+GITHUB_REPO=$1
+BRANCH=${2:-master}
 
-echo "Migrando $REPO_NAME@$BRANCH_NAME"
-echo "Archivos: $FILES_TO_MIGRATE"
+if [ -z "$OPENAI_API_KEY" ]; then
+  echo "❌ OPENAI_API_KEY no está definido"
+  exit 1
+fi
 
-for file in $FILES_TO_MIGRATE; do
-  rel="${file#./}"
-  echo "Procesando $rel"
+if [ -z "$GITHUB_REPO" ]; then
+  echo "❌ Uso: ./migrate-with-ai.sh owner/repo [branch]"
+  exit 1
+fi
 
-  content=$(jq -Rsa . < "$file")
+echo "🔄 Migrando $GITHUB_REPO@$BRANCH"
 
-  prompt=$(cat <<EOP
-Eres un experto DevOps senior.
+# ============================
+# CLONAR REPO
+# ============================
 
-Convierte este archivo (${rel}, tipo ${TYPE})
-a GitHub Actions YAML moderno y robusto.
+rm -rf repo migrated
+git clone --depth 1 --branch "$BRANCH" "https://github.com/$GITHUB_REPO.git" repo
 
-Reglas:
-- vars/*.groovy → Composite Action
-- src/*.groovy → steps bash/java
-- Jenkinsfile / azure-pipelines → Reusable Workflow
-- Incluye cache, matrix, manejo errores.
-- Devuelve SOLO YAML separado por ---.
+mkdir -p "migrated/$GITHUB_REPO/$BRANCH"
 
-Contenido:
-${content}
-EOP
-)
+cd repo
 
-  response=$(curl -s https://api.openai.com/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $OPENAI_API_KEY" \
-    -d "{
-      \"model\": \"${OPENAI_MODEL}\",
-      \"messages\": [{\"role\": \"user\", \"content\": $content}],
-      \"temperature\": 0.2,
-      \"max_tokens\": 12000
-    }")
+FILES=$(find . -type f \( -name "*.yml" -o -name "*.yaml" \))
+
+if [ -z "$FILES" ]; then
+  echo "⚠️ No se encontraron archivos YAML"
+  exit 0
+fi
+
+echo "📂 Archivos encontrados:"
+echo "$FILES"
+
+# ============================
+# PROCESAR ARCHIVOS
+# ============================
+
+for file in $FILES; do
+  echo "-------------------------------------------------"
+  echo "🚀 Procesando $file"
+
+  content=$(cat "$file")
+
+  prompt="Eres un experto DevOps.
+
+Migra el siguiente pipeline a Jenkins declarative pipeline.
+
+Devuelve SOLO el código Jenkinsfile.
+No agregues explicaciones.
+
+Contenido original:
+$content
+"
+
+  # ============================
+  # LLAMADA A OPENAI (FORMA CORRECTA)
+  # ============================
+
+  response=$(jq -n \
+    --arg model "$OPENAI_MODEL" \
+    --arg prompt "$prompt" \
+    '{
+      model: $model,
+      messages: [
+        { role: "user", content: $prompt }
+      ],
+      temperature: 0.2,
+      max_tokens: 4000
+    }' | curl -s https://api.openai.com/v1/chat/completions \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer '"$OPENAI_API_KEY"'" \
+        -d @-)
+
+  # Mostrar respuesta completa para debug
+  echo "🧠 Respuesta API:"
+  echo "$response" | jq .
+
+  # Verificar si hubo error
+  api_error=$(echo "$response" | jq -r '.error.message // empty')
+
+  if [ -n "$api_error" ]; then
+    echo "❌ Error OpenAI: $api_error"
+    continue
+  fi
 
   generated=$(echo "$response" | jq -r '.choices[0].message.content // empty')
 
   if [ -z "$generated" ]; then
-    echo "Error IA"
+    echo "❌ Error IA: respuesta vacía"
     continue
   fi
 
-  safe=$(echo "$rel" | sed 's/[^a-zA-Z0-9._-]/_/g' | sed 's/\.[^.]*$//')
-  dir="../$OUTPUT_BASE/$safe"
-  mkdir -p "$dir"
+  # ============================
+  # GUARDAR RESULTADO
+  # ============================
 
-  echo "$generated" | csplit -f "$dir/part-" -n 2 -s '/^---$/' '{*}'
+  output_path="../migrated/$GITHUB_REPO/$BRANCH/${file#./}"
+  mkdir -p "$(dirname "$output_path")"
 
-  i=1
-  for p in "$dir"/part-*; do
-    if [ -s "$p" ]; then
-      mv "$p" "$dir/generated_${i}.yml"
-      ((i++))
-    else
-      rm "$p"
-    fi
-  done
+  echo "$generated" > "$output_path"
+
+  echo "✅ Migrado → $output_path"
 
 done
 
 cd ..
-echo "Migración completada"
-ls -R migrated || true
+
+echo "-------------------------------------------------"
+echo "🎉 Migración completada"
+echo "📁 Resultados en: migrated/$GITHUB_REPO/$BRANCH"
