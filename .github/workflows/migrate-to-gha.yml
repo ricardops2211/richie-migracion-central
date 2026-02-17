@@ -13,7 +13,8 @@ jobs:
   debug-and-generate-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix || '[]' }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,51 +32,62 @@ jobs:
             cat repos-config.json
           else
             echo "ERROR: repos-config.json NO EXISTE en la raíz"
-            ls -la
             exit 1
           fi
 
       - name: Validar JSON y construir matrix
         id: build-matrix
         run: |
-          echo "Intentando parsear repos-config.json..."
+          echo "Validando JSON..."
 
-          RAW_OUTPUT=$(jq -r '
-            .[] 
-            | (.branches // [.branch // "main"]) as $b
-            | $b[]
+          if ! jq empty repos-config.json; then
+            echo "JSON inválido"
+            echo "matrix=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Construyendo matrix..."
+
+          RAW_OUTPUT=$(jq -c '
+            .[] as $repo
+            | ($repo.branches // [$repo.branch // "main"]) as $branches
+            | $branches[]
             | {
-                repo: .repo,
+                repo: $repo.repo,
                 branch: .,
-                shared_lib_path: (.shared_lib_path // "vars/"),
-                jenkins_path: (.jenkins_path // "Jenkinsfile"),
-                type: (.type // "jenkins")
+                shared_lib_path: ($repo.shared_lib_path // "vars/"),
+                jenkins_path: ($repo.jenkins_path // "Jenkinsfile"),
+                type: ($repo.type // "jenkins")
               }
-            | @json
-          ' repos-config.json 2>&1)
+          ' repos-config.json)
 
-          echo "Salida cruda de jq:"
+          echo "Salida cruda:"
           echo "$RAW_OUTPUT"
 
-          MATRIX=$(echo "$RAW_OUTPUT" | jq -s -c 'map(select(. != null))' 2>&1 || echo "[]")
+          MATRIX=$(echo "$RAW_OUTPUT" | jq -s -c '.')
 
           echo "Matrix final:"
-          echo "$MATRIX" | jq . || echo "Matrix inválida o vacía"
+          echo "$MATRIX" | jq .
 
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   migrate:
     needs: debug-and-generate-matrix
     runs-on: ubuntu-latest
-    if: ${{ fromJson(needs.debug-and-generate-matrix.outputs.matrix) != '[]' }}
+    if: ${{ needs.debug-and-generate-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       max-parallel: 5
       matrix:
         config: ${{ fromJson(needs.debug-and-generate-matrix.outputs.matrix) }}
-    steps:
-      - run: echo "Entrando en migración para repo ${{ matrix.config.repo }} rama ${{ matrix.config.branch }}"
 
-      # Aquí puedes pegar tus pasos originales (checkout, find-files, script IA, artifacts)
-      # Por ahora lo dejo mínimo para depurar el matrix
+    steps:
+      - name: Mostrar configuración actual
+        run: |
+          echo "Repo: ${{ matrix.config.repo }}"
+          echo "Branch: ${{ matrix.config.branch }}"
+          echo "Shared Lib Path: ${{ matrix.config.shared_lib_path }}"
+          echo "Jenkins Path: ${{ matrix.config.jenkins_path }}"
+          echo "Type: ${{ matrix.config.type }}"
+
       - run: echo "Job ejecutado correctamente"

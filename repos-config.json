@@ -1,7 +1,7 @@
 [
   {
     "repo": "ricardops2211/richie-jenkins-shared-lib",
-    "branches": ["main"],
+    "branch": "main",
     "shared_lib_path": "vars/",
     "jenkins_path": "Jenkinsfile-example",
     "type": "jenkins"
@@ -10,12 +10,14 @@
     "repo": "boozallen/sdp-libraries",
     "branch": "main",
     "shared_lib_path": "vars/",
+    "jenkins_path": "Jenkinsfile",
     "type": "jenkins"
   },
   {
     "repo": "ricardops2211/richie-azure-devops-templates",
     "branch": "main",
     "shared_lib_path": "templates/",
+    "jenkins_path": "Jenkinsfile",
     "type": "azure"
   }
 ]
