@@ -172,10 +172,19 @@ jobs:
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
 
+      - name: Listar archivos finales
+        if: always()
+        run: |
+          echo "=== Archivos a subir ==="
+          find migration-repo/migrated -type f
+          echo ""
+          echo "Total: $(find migration-repo/migrated -type f | wc -l)"
+
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: ${{ runner.workspace }}/artifacts/
+          path: |
+            migration-repo/migrated/ricardops2211/
           retention-days: 7
