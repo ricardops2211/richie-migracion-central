@@ -128,14 +128,21 @@ jobs:
           find artifacts -type f | wc -l
           find artifacts -type f | head -10
 
+      - name: Mover artifacts al root
+        if: always()
+        run: |
+          mkdir -p final-artifacts
+          cp -r migration-repo/artifacts/* final-artifacts/ || true
+
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: migration-repo/artifacts/**
+          path: final-artifacts/**
           if-no-files-found: warn
           retention-days: 7
+
 
 
 
