@@ -119,10 +119,17 @@ jobs:
           chmod +x ./scripts/migrate-with-ai.sh
           ./scripts/migrate-with-ai.sh
 
+      - name: Preparar nombre de artifact
+        id: artifact-name
+        run: |
+          # Convertir / a - usando sed
+          SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
+          echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
+
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migrated-${{ replace(matrix.config.repo, '/', '-') }}-${{ matrix.config.branch }}
+          name: ${{ steps.artifact-name.outputs.name }}
           path: migration-repo/migrated/**
           retention-days: 7
