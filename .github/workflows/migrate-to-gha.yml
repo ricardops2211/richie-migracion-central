@@ -11,10 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  generate-matrix:
+  migrate-all:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.build.outputs.matrix || '[]' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,55 +22,9 @@ jobs:
             echo "JSON encontrado"
             cat repos-config.json
           else
-            echo "ERROR: No existe repos-config.json"
+            echo "ERROR: repos-config.json no existe"
             exit 1
           fi
-
-      - name: Generar matrix
-        id: build
-        run: |
-          MATRIX=$(jq -r '
-            .[] 
-            | (.branches // [.branch // "master"]) as $b
-            | $b[]
-            | {
-                repo: .repo,
-                branch: .,
-                shared_lib_path: (.shared_lib_path // "vars/"),
-                jenkins_path: (.jenkins_path // "Jenkinsfile"),
-                type: (.type // "jenkins")
-              }
-            | @json
-          ' repos-config.json | jq -s -c 'map(.)' || echo "[]")
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-
-  migrate:
-    needs: generate-matrix
-    runs-on: ubuntu-latest
-    if: ${{ fromJson(needs.generate-matrix.outputs.matrix) != '[]' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 5
-      matrix:
-        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    steps:
-      - name: Checkout origen
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ matrix.config.repo }}
-          ref: ${{ matrix.config.branch }}
-          path: source-repo
-          token: ${{ secrets.GH_PAT }}
-
-      - name: Buscar archivos
-        id: find-files
-        run: |
-          cd source-repo
-          FILES=$(find . -type f \
-            \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
-            -path "*${{ matrix.config.shared_lib_path }}*" -o -path "*${{ matrix.config.jenkins_path }}*" \
-            | tr '\n' ' ')
-          echo "files=$FILES" >> $GITHUB_OUTPUT
 
       - name: Transformar con Groq
         if: steps.find-files.outputs.files != ''
@@ -87,10 +39,10 @@ jobs:
           chmod +x ./scripts/migrate-with-ai.sh
           ./scripts/migrate-with-ai.sh
 
-      - name: Subir Artifacts
+      - name: Subir resultados como Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
+          name: migrated-files
           path: migrated/**
           retention-days: 7
