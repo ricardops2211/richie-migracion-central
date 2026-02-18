@@ -130,10 +130,12 @@ jobs:
 
       - name: Subir Artifacts
         if: always()
-        working-directory: migration-repo
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: artifacts
+          path: migration-repo/artifacts
+          if-no-files-found: warn
           retention-days: 7
+
+
 
