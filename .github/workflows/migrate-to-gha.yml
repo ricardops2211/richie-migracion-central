@@ -1,4 +1,4 @@
-name: Migración Automatizada a GitHub Actions (con Groq)
+name: Migración Automatizada a GitHub Actions
 
 on:
   push:
@@ -122,6 +122,7 @@ jobs:
 
       - name: Listar archivos generados
         if: always()
+        working-directory: migration-repo
         run: |
           echo "Archivos en artifacts/:"
           find artifacts -type f | wc -l
@@ -129,8 +130,10 @@ jobs:
 
       - name: Subir Artifacts
         if: always()
+        working-directory: migration-repo
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: artifacts/**
+          path: artifacts
           retention-days: 7
+

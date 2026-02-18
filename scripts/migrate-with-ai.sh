@@ -29,7 +29,9 @@ if [ -z "$FILES_TO_MIGRATE" ]; then
 fi
 
 SOURCE_REPO_PATH="../source-repo"
-OUTPUT_BASE="../artifacts/${REPO_NAME}/${BRANCH_NAME}"
+OUTPUT_BASE="artifacts/${REPO_NAME}/${BRANCH_NAME}"
+
+
 
 mkdir -p "$OUTPUT_BASE" || { echo "ERROR: No se pudo crear $OUTPUT_BASE"; exit 1; }
 
@@ -290,16 +292,17 @@ echo "Éxitos: $processed"
 echo "Fallos: $failed"
 echo ""
 
-ARTIFACT_ROOT="../artifacts"
+ARTIFACT_ROOT="artifacts"
 
-if [ -d "migrated" ]; then
-  total_files=$(find migrated -type f 2>/dev/null | wc -l)
+
+if [ -d "$ARTIFACT_ROOT" ]; then
+  total_files=$(find "$ARTIFACT_ROOT" -type f 2>/dev/null | wc -l)
   echo "$total_files archivos generados:"
-  find migrated -type f | head -30 | sed 's/^/  /'
-  [ $(find migrated -type f | wc -l) -gt 30 ] && echo "  ... y más"
+  find "$ARTIFACT_ROOT" -type f | head -30 | sed 's/^/  /'
 else
-  echo "⚠ No hay archivos migrados"
+  echo "⚠ No hay archivos generados"
 fi
+
 
 
 
