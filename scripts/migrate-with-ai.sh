@@ -1,74 +1,72 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Variables de entorno (con defaults seguros para pruebas)
-OPENAI_API_KEY="${OPENAI_API_KEY:-}"
-OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"
+# Variables requeridas desde el workflow
+GROQ_API_KEY="${GROQ_API_KEY:-}"
+GROQ_MODEL="${GROQ_MODEL:-deepseek-coder-v2-lite}"
 REPO_NAME="${REPO_NAME:-unknown-repo}"
 BRANCH_NAME="${BRANCH_NAME:-unknown-branch}"
 FILES_TO_MIGRATE="${FILES_TO_MIGRATE:-}"
 TYPE="${TYPE:-unknown}"
 
-# Logging para depuración
-echo "=== DEBUG: Variables recibidas ==="
-echo "OPENAI_API_KEY: [longitud ${#OPENAI_API_KEY} caracteres]"
-echo "OPENAI_MODEL: $OPENAI_MODEL"
+# Depuración inicial
+echo "=== DEBUG GROQ ==="
+echo "GROQ_MODEL: $GROQ_MODEL"
 echo "REPO_NAME: $REPO_NAME"
 echo "BRANCH_NAME: $BRANCH_NAME"
 echo "FILES_TO_MIGRATE: $FILES_TO_MIGRATE"
 echo "TYPE: $TYPE"
-echo "=================================="
+echo "==================="
 
-if [ -z "$OPENAI_API_KEY" ]; then
-  echo "ERROR: OPENAI_API_KEY no está definida o está vacía"
+if [ -z "$GROQ_API_KEY" ]; then
+  echo "ERROR: GROQ_API_KEY no está definida"
   exit 1
 fi
 
 if [ -z "$FILES_TO_MIGRATE" ]; then
-  echo "No hay archivos para migrar. Saliendo sin error."
+  echo "No hay archivos para migrar"
   exit 0
 fi
 
 OUTPUT_BASE="migrated/${REPO_NAME}/${BRANCH_NAME}"
 mkdir -p "$OUTPUT_BASE"
 
-echo "Iniciando migración para ${REPO_NAME}@${BRANCH_NAME}"
-
 for file in $FILES_TO_MIGRATE; do
   rel_path="${file#./}"
   echo "→ Procesando: $rel_path"
 
-  content=$(cat "source-repo/$file" | jq -Rsa . 2>/dev/null || echo "Error leyendo $file")
+  content=$(cat "source-repo/$file" | jq -Rsa . 2>/dev/null || echo "Error leyendo archivo")
 
   prompt=$(cat <<'EOP'
-Eres un experto DevOps. Convierte este archivo (${rel_path}, tipo ${TYPE}) a GitHub Actions YAML robusto.
+Eres un experto DevOps senior. Convierte este archivo (${rel_path}, tipo ${TYPE}) a GitHub Actions YAML robusto y moderno.
 
-Reglas:
-- vars/*.groovy → Composite Action
-- src/* → lógica en steps
-- Jenkinsfile o azure-pipelines.yml → Reusable Workflow
-- Añade caching, error handling, matrix si aplica
-- Devuelve SOLO YAML, separado por --- si hay varios
+Reglas estrictas:
+- .groovy en vars/ → Composite Action (.github/actions/nombre/action.yml)
+- src/ (Groovy/Java-like) → lógica en steps run: bash o java
+- Jenkinsfile o azure-pipelines.yml → Reusable Workflow con workflow_call
+- Siempre añade: actions/cache, error handling (continue-on-error, retry), matrix si aplica
+- Genera YAMLs separados por --- si hay múltiples
+- Devuelve SOLO código YAML, sin explicaciones
 
 Contenido:
 $content
 EOP
   )
 
-  response=$(curl -s https://api.openai.com/v1/chat/completions \
+  response=$(curl -s https://api.groq.com/openai/v1/chat/completions \
+    -H "Authorization: Bearer $GROQ_API_KEY" \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $OPENAI_API_KEY" \
     -d '{
-      "model": "'"$OPENAI_MODEL"'",
+      "model": "'"$GROQ_MODEL"'",
       "messages": [{"role": "user", "content": "'"$prompt"'"}],
       "temperature": 0.2,
       "max_tokens": 12000
-    }' || echo "Error curl")
+    }')
 
   generated=$(echo "$response" | jq -r '.choices[0].message.content // empty')
 
   if [ -z "$generated" ]; then
-    echo "ERROR en respuesta para $rel_path"
+    echo "ERROR Groq para $rel_path"
     echo "$response" > "$OUTPUT_BASE/error-$rel_path.json"
     continue
   fi
@@ -77,12 +75,14 @@ EOP
   output_dir="$OUTPUT_BASE/$safe_name"
   mkdir -p "$output_dir"
 
-  echo "$generated" | csplit -f "part-" -n 2 -s '/^---$/' '{*}' 2>/dev/null || echo "No se pudo dividir con ---"
+  echo "$generated" | csplit -f "part-" -n 2 -s '/^---$/' '{*}' 2>/dev/null || echo "No se pudo dividir"
 
   i=1
   for part in part-*; do
     if [ -s "$part" ]; then
-      mv "$part" "$output_dir/generated_${i}.yml"
+      target="$output_dir/generated_${i}.yml"
+      mv "$part" "$target"
+      echo "  Generado: $target"
       ((i++))
     else
       rm "$part"
@@ -90,5 +90,5 @@ EOP
   done
 done
 
-echo "Finalizado"
+echo "Migración finalizada con Groq"
 ls -R migrated/ 2>/dev/null || echo "No hay archivos migrados"

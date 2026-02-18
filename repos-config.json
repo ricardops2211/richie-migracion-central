@@ -8,7 +8,7 @@
   },
   {
     "repo": "boozallen/sdp-libraries",
-    "branch": "master",
+    "branch": "main",
     "shared_lib_path": "vars/",
     "type": "jenkins"
   },

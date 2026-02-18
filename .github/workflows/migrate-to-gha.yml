@@ -1,10 +1,10 @@
-name: Migración Automatizada a GitHub Actions (con IA)
+name: Migración Automatizada a GitHub Actions (con Groq)
 
 on:
   push:
     branches:
-      - master
       - main
+      - master
   workflow_dispatch:
 
 permissions:
@@ -21,18 +21,15 @@ jobs:
       - name: Verificar repos-config.json
         run: |
           if [ -f repos-config.json ]; then
-            echo "JSON encontrado:"
+            echo "JSON encontrado"
             cat repos-config.json
-            echo ""
-            echo "Validando sintaxis JSON..."
-            jq . repos-config.json > /dev/null && echo "JSON válido" || echo "JSON inválido - revisa comas/llaves"
           else
-            echo "ERROR: repos-config.json NO existe en la raíz"
+            echo "ERROR: No existe repos-config.json"
             ls -la
             exit 1
           fi
 
-      - name: Generar matrix dinámica
+      - name: Generar matrix
         id: build
         run: |
           MATRIX=$(jq -r '
@@ -47,14 +44,8 @@ jobs:
                 type: (.type // "jenkins")
               }
             | @json
-          ' repos-config.json 2>&1 || echo "[]")
-
-          MATRIX_CLEAN=$(echo "$MATRIX" | jq -s -c 'map(.)' 2>&1 || echo "[]")
-
-          echo "matrix=$MATRIX_CLEAN" >> $GITHUB_OUTPUT
-
-          echo "Matrix generada (longitud: $(echo "$MATRIX_CLEAN" | jq length)):"
-          echo "$MATRIX_CLEAN" | jq . || echo "No se pudo mostrar"
+          ' repos-config.json | jq -s -c 'map(.)' || echo "[]")
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   migrate:
     needs: generate-matrix
@@ -66,7 +57,7 @@ jobs:
       matrix:
         config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout repositorio origen
+      - name: Checkout origen
         uses: actions/checkout@v4
         with:
           repository: ${{ matrix.config.repo }}
@@ -79,20 +70,16 @@ jobs:
         run: |
           cd source-repo
           FILES=$(find . -type f \
-            \( -name "*.groovy" \
-            -o -name "Jenkinsfile*" \
-            -o -name "*.yml" \
-            -o -name "*.yaml" \) \
-            -path "*${{ matrix.config.shared_lib_path }}*" \
-            -o -path "*${{ matrix.config.jenkins_path }}*" \
+            \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
+            -path "*${{ matrix.config.shared_lib_path }}*" -o -path "*${{ matrix.config.jenkins_path }}*" \
             | tr '\n' ' ')
           echo "files=$FILES" >> $GITHUB_OUTPUT
 
-      - name: Transformar con IA
+      - name: Transformar con Groq
         if: steps.find-files.outputs.files != ''
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: gpt-4o
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: deepseek-coder-v2-lite
           REPO_NAME: ${{ matrix.config.repo }}
           BRANCH_NAME: ${{ matrix.config.branch }}
           FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
