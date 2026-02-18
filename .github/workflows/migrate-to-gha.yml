@@ -14,7 +14,7 @@ jobs:
   generate-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build.outputs.matrix || '[]' }}
+      matrix: ${{ steps.build.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,17 +22,14 @@ jobs:
         run: |
           if [ -f repos-config.json ]; then
             echo "JSON encontrado en raíz"
-            echo "Contenido crudo:"
-            cat -v repos-config.json  # muestra caracteres ocultos
-            echo ""
             echo "Validando JSON..."
             jq . repos-config.json > /dev/null 2>&1
             if [ $? -eq 0 ]; then
               echo "JSON válido"
               cat repos-config.json
             else
-              echo "ERROR: JSON inválido - jq falló"
-              jq . repos-config.json  # muestra el error exacto
+              echo "ERROR: JSON inválido"
+              jq . repos-config.json
               exit 1
             fi
           else
@@ -44,29 +41,26 @@ jobs:
       - name: Generar matrix
         id: build
         run: |
-          MATRIX=$(jq -r '
+          MATRIX=$(jq -c '[
             .[] 
             | (.branches // [.branch // "master"]) as $b
-            | $b[]
+            | $b[] as $branch
             | {
                 repo: .repo,
-                branch: .,
+                branch: $branch,
                 shared_lib_path: (.shared_lib_path // "vars/"),
                 jenkins_path: (.jenkins_path // "Jenkinsfile"),
                 type: (.type // "jenkins")
               }
-            | @json
-          ' repos-config.json 2>&1)
+          ]' repos-config.json)
 
-          echo "Salida cruda de jq:"
-          echo "$MATRIX"
+          echo "Matrix generado:"
+          echo "$MATRIX" | jq .
 
-          MATRIX_CLEAN=$(echo "$MATRIX" | jq -s -c 'map(.)' 2>&1 || echo "[]")
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
-          echo "matrix=$MATRIX_CLEAN" >> $GITHUB_OUTPUT
-
-          echo "Matrix final (entradas: $(echo "$MATRIX_CLEAN" | jq length || echo 0)):"
-          echo "$MATRIX_CLEAN" | jq . || echo "Matrix vacía"
+          echo "Matriz final (entradas: $(echo "$MATRIX" | jq 'length')):"
+          echo "$MATRIX" | jq length
 
   migrate:
     needs: generate-matrix
@@ -92,7 +86,7 @@ jobs:
           cd source-repo
           FILES=$(find . -type f \
             \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
-            -path "*${{ matrix.config.shared_lib_path }}*" -o -path "*${{ matrix.config.jenkins_path }}*" \
+            \( -path "*${{ matrix.config.shared_lib_path }}*" -o -path "*${{ matrix.config.jenkins_path }}*" \) \
             | tr '\n' ' ')
           echo "files=$FILES" >> $GITHUB_OUTPUT
 
