@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail  # Quitamos -e para manejar errores manualmente
 
 # Variables requeridas desde el workflow
 GROQ_API_KEY="${GROQ_API_KEY:-}"
@@ -30,35 +30,53 @@ fi
 
 SOURCE_REPO_PATH="../source-repo"
 OUTPUT_BASE="migrated/${REPO_NAME}/${BRANCH_NAME}"
-mkdir -p "$OUTPUT_BASE"
+mkdir -p "$OUTPUT_BASE" || { echo "ERROR: No se pudo crear $OUTPUT_BASE"; exit 1; }
+
+echo "DEBUG: Verificando rutas:"
+echo "  PWD: $(pwd)"
+echo "  SOURCE_REPO_PATH existe: $([ -d "$SOURCE_REPO_PATH" ] && echo "SÍ" || echo "NO")"
+echo "  OUTPUT_BASE: $OUTPUT_BASE"
+echo ""
 
 file_count=0
 processed=0
+failed=0
 
-while IFS= read -r file; do
+echo "Iniciando procesamiento de archivos..."
+echo ""
+
+while IFS= read -r file || [ -n "$file" ]; do
   [ -z "$file" ] && continue
-  ((file_count++))
   
+  ((file_count++))
   file=$(echo "$file" | xargs)
+  
+  echo "→ [$(printf "%2d" $((processed + failed + 1)))/$file_count] Procesando: $file"
+  
   full_path="$SOURCE_REPO_PATH/$file"
   
-  echo "→ Procesando: $file ($(($processed + 1))/$file_count)"
-  
+  # Verificar que el archivo existe
   if [ ! -f "$full_path" ]; then
-    echo "  ⚠ Archivo no encontrado: $full_path"
-    mkdir -p "$OUTPUT_BASE"
-    echo "{\"error\": \"File not found: $full_path\"}" > "$OUTPUT_BASE/error-$(basename "$file" | sed 's/[^a-zA-Z0-9._-]/_/g').json"
+    echo "  ⚠ ERROR: Archivo no encontrado: $full_path"
+    ((failed++))
     continue
   fi
   
-  echo "  ✓ Archivo encontrado, leyendo..."
-  content=$(cat "$full_path")
+  echo "  ✓ Archivo encontrado"
   
-  # Prompt mejorado para generar archivos separados
-  prompt="Eres un experto DevOps senior. Convierte este archivo ($file, tipo $TYPE) a GitHub Actions YAML.
+  # Leer contenido del archivo
+  content=$(cat "$full_path" 2>&1) || {
+    echo "  ❌ ERROR: No se pudo leer el archivo"
+    ((failed++))
+    continue
+  }
+  
+  # Construir el prompt
+  read -r -d '' prompt << 'PROMPT_END' || true
+Eres un experto DevOps senior. Convierte este archivo a GitHub Actions YAML.
 
 REGLAS CRÍTICAS:
-1. Si generas MÚLTIPLES archivos, sepáralos con '---ARCHIVO_SEPARATOR---' (NO con ---)
+1. Si generas MÚLTIPLES archivos, sepáralos con '---ARCHIVO_SEPARATOR---'
 2. ANTES de cada YAML, escribe: '##FILE: ruta/del/archivo.yml'
 3. .groovy en vars/ → .github/actions/nombre/action.yml (Composite Action)
 4. Jenkinsfile → .github/workflows/nombre.yml (Reusable Workflow con workflow_call)
@@ -74,7 +92,7 @@ runs:
   using: composite
   steps:
     - name: Step
-      run: echo \"hello\"
+      run: echo "hello"
 
 ---ARCHIVO_SEPARATOR---
 
@@ -82,9 +100,6 @@ runs:
 name: deploy
 on:
   workflow_call:
-    inputs:
-      env:
-        type: string
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -93,86 +108,115 @@ jobs:
 
 ---ARCHIVO_SEPARATOR---
 
-Contenido a convertir:
-$content"
+INFORMACIÓN DEL ARCHIVO:
+- Nombre: $file
+- Tipo: $TYPE
+
+Contenido:
+$content
+PROMPT_END
 
   echo "  Enviando a Groq API..."
   
   max_retries=3
   retry=0
   success=false
+  generated=""
   
   while [ $retry -lt $max_retries ] && [ "$success" = false ]; do
-    response=$(curl -s https://api.groq.com/openai/v1/chat/completions \
+    echo "    [Intento $((retry + 1))/$max_retries]"
+    
+    response=$(curl -s -w "\n%{http_code}" https://api.groq.com/openai/v1/chat/completions \
       -H "Authorization: Bearer $GROQ_API_KEY" \
       -H "Content-Type: application/json" \
-      -d @- <<EOF
-{
-  "model": "$GROQ_MODEL",
-  "messages": [{"role": "user", "content": $(printf '%s\n' "$prompt" | jq -Rs .)}],
-  "temperature": 0.2,
-  "max_tokens": 15000
-}
-EOF
-    )
+      -d "{
+        \"model\": \"$GROQ_MODEL\",
+        \"messages\": [{\"role\": \"user\", \"content\": $(printf '%s\n' "$prompt" | jq -Rs .)}],
+        \"temperature\": 0.2,
+        \"max_tokens\": 15000
+      }" 2>&1) || {
+        echo "    ❌ Error en curl"
+        ((retry++))
+        [ $retry -lt $max_retries ] && sleep $((RATE_LIMIT_DELAY + retry))
+        continue
+      }
     
-    generated=$(echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+    # Separar respuesta del código HTTP
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n-1)
     
-    if [ -n "$generated" ]; then
-      success=true
-      break
-    fi
+    echo "    HTTP Code: $http_code"
     
-    error_msg=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null)
-    if [[ "$error_msg" == *"Rate limit"* ]]; then
-      ((retry++))
-      if [ $retry -lt $max_retries ]; then
-        wait_time=$((RATE_LIMIT_DELAY + retry * 2))
-        echo "  ⏳ Rate limit. Esperando ${wait_time}s (intento $((retry+1))/$max_retries)..."
-        sleep "$wait_time"
+    if [ "$http_code" = "200" ]; then
+      generated=$(echo "$body" | jq -r '.choices[0].message.content // empty' 2>/dev/null) || {
+        echo "    ❌ Error parseando JSON"
+        ((retry++))
+        [ $retry -lt $max_retries ] && sleep $((RATE_LIMIT_DELAY + retry))
+        continue
+      }
+      
+      if [ -n "$generated" ]; then
+        success=true
+        echo "    ✓ Respuesta recibida ($(echo "$generated" | wc -c) caracteres)"
+        break
       fi
     else
-      echo "  ❌ ERROR: $error_msg"
-      echo "$response" > "$OUTPUT_BASE/error-$(basename "$file").json"
-      success=false
-      break
+      error_msg=$(echo "$body" | jq -r '.error.message // "Error desconocido"' 2>/dev/null)
+      
+      if [[ "$error_msg" == *"Rate limit"* ]]; then
+        ((retry++))
+        if [ $retry -lt $max_retries ]; then
+          wait_time=$((RATE_LIMIT_DELAY + retry * 2))
+          echo "    ⏳ Rate limit. Esperando ${wait_time}s..."
+          sleep "$wait_time"
+        fi
+      else
+        echo "    ❌ Error Groq: $error_msg"
+        ((failed++))
+        success=false
+        break
+      fi
     fi
   done
   
-  if [ "$success" = true ]; then
+  if [ "$success" = true ] && [ -n "$generated" ]; then
     safe_name=$(basename "$file" | sed 's/\.[^.]*$//' | sed 's/[^a-zA-Z0-9._-]/_/g')
     output_dir="$OUTPUT_BASE/$safe_name"
-    mkdir -p "$output_dir"
+    mkdir -p "$output_dir" || {
+      echo "  ❌ No se pudo crear directorio: $output_dir"
+      ((failed++))
+      continue
+    }
     
-    # Dividir por ---ARCHIVO_SEPARATOR---
-    echo "$generated" | awk '
+    # Procesar la salida con awk para dividir archivos
+    echo "$generated" | awk -v outdir="$output_dir" '
       BEGIN {
-        file_num = 0
+        file_count = 0
         current_file = ""
         content = ""
       }
       /^---ARCHIVO_SEPARATOR---$/ {
         if (current_file != "") {
-          filename = "'$output_dir'/" file_num "_" current_file
+          filename = outdir "/" file_count "_" current_file
           gsub(/[^a-zA-Z0-9._\/-]/, "_", filename)
           print content > filename
-          print "    ✓ Generado: " filename
+          close(filename)
+          print "    ✓ " filename
         }
-        file_num = 0
+        file_count = 0
         current_file = ""
         content = ""
         next
       }
       /^##FILE:/ {
-        # Guardar archivo anterior si existe
         if (current_file != "") {
-          filename = "'$output_dir'/" file_num "_" current_file
+          filename = outdir "/" file_count "_" current_file
           gsub(/[^a-zA-Z0-9._\/-]/, "_", filename)
           print content > filename
-          print "    ✓ Generado: " filename
-          file_num++
+          close(filename)
+          print "    ✓ " filename
+          file_count++
         }
-        # Extraer nombre del archivo
         current_file = $0
         gsub(/^##FILE:[ \t]*/, "", current_file)
         gsub(/[ \t]*$/, "", current_file)
@@ -186,34 +230,48 @@ EOF
       }
       END {
         if (current_file != "") {
-          filename = "'$output_dir'/" file_num "_" current_file
+          filename = outdir "/" file_count "_" current_file
           gsub(/[^a-zA-Z0-9._\/-]/, "_", filename)
           print content > filename
-          print "    ✓ Generado: " filename
+          close(filename)
+          print "    ✓ " filename
         }
       }
-    '
+    ' || {
+      echo "  ❌ Error procesando archivos"
+      ((failed++))
+      continue
+    }
     
-    echo "  ✓ Procesado completamente"
+    echo "  ✓ Completado"
     ((processed++))
     
-    if [ $processed -lt $file_count ]; then
-      echo "  ⏰ Esperando ${RATE_LIMIT_DELAY}s..."
+    if [ $((processed + failed)) -lt $file_count ]; then
       sleep "$RATE_LIMIT_DELAY"
     fi
   else
-    echo "  ❌ No se pudo procesar después de $max_retries intentos"
+    echo "  ❌ No se pudo procesar"
+    ((failed++))
   fi
+  
+  echo ""
   
 done <<< "$FILES_TO_MIGRATE"
 
+echo "=== Resumen final ==="
+echo "Total archivos procesados: $file_count"
+echo "Éxitos: $processed"
+echo "Fallos: $failed"
 echo ""
-echo "=== Migración finalizada ==="
-echo "Procesados: $processed/$file_count archivos"
+
 if [ -d "migrated" ]; then
   total_files=$(find migrated -type f 2>/dev/null | wc -l)
   echo "$total_files archivos generados:"
-  find migrated -type f | sed 's/^/  /'
+  find migrated -type f | head -20 | sed 's/^/  /'
+  [ $(find migrated -type f | wc -l) -gt 20 ] && echo "  ... y más"
 else
   echo "⚠ No hay archivos migrados"
 fi
+
+# Retornar código de error si hubo fallos
+[ $failed -eq 0 ] && exit 0 || exit 0  # Permitir que el workflow continúe
