@@ -9,7 +9,6 @@ BRANCH_NAME="${BRANCH_NAME:-unknown-branch}"
 FILES_TO_MIGRATE="${FILES_TO_MIGRATE:-}"
 TYPE="${TYPE:-unknown}"
 
-# Depuración inicial
 echo "=== DEBUG GROQ ==="
 echo "GROQ_MODEL: $GROQ_MODEL"
 echo "REPO_NAME: $REPO_NAME"
@@ -31,26 +30,41 @@ fi
 OUTPUT_BASE="migrated/${REPO_NAME}/${BRANCH_NAME}"
 mkdir -p "$OUTPUT_BASE"
 
-for file in $FILES_TO_MIGRATE; do
-  # Limpiar el prefijo ./
-  clean_file="${file#./}"
-  full_path="source-repo/$clean_file"
+# Debug: mostrar archivos en source-repo
+echo "DEBUG: Contenido de source-repo:"
+find source-repo -type f \( -name "*.groovy" -o -name "Jenkinsfile*" \) 2>/dev/null || echo "  (ninguno encontrado)"
+echo ""
+
+while IFS= read -r file; do
+  # Saltar líneas vacías
+  [ -z "$file" ] && continue
   
-  echo "→ Procesando: $clean_file"
+  # Limpiar espacios
+  file=$(echo "$file" | xargs)
+  
+  echo "→ Procesando: $file"
+  
+  # Construir ruta completa
+  full_path="source-repo/$file"
+  
+  # Eliminar ./ si existe
+  full_path="${full_path//\.\//}"
   
   # Verificar que el archivo existe
   if [ ! -f "$full_path" ]; then
     echo "  ⚠ Archivo no encontrado: $full_path"
     mkdir -p "$OUTPUT_BASE"
-    echo "{\"error\": \"File not found: $full_path\"}" > "$OUTPUT_BASE/error-$(echo "$clean_file" | sed 's/[^a-zA-Z0-9._-]/_/g').json"
+    echo "{\"error\": \"File not found: $full_path\", \"searched_at\": \"$(pwd)/$full_path\"}" > "$OUTPUT_BASE/error-$(basename "$file" | sed 's/[^a-zA-Z0-9._-]/_/g').json"
     continue
   fi
   
-  # Leer contenido del archivo
-  content=$(cat "$full_path" | jq -Rsa .)
+  echo "  ✓ Archivo encontrado, leyendo..."
   
-  # Construir el prompt (sin variables bash, pasarlas directamente)
-  prompt="Eres un experto DevOps senior. Convierte este archivo (${clean_file}, tipo ${TYPE}) a GitHub Actions YAML robusto y moderno.
+  # Leer contenido del archivo
+  content=$(cat "$full_path")
+  
+  # Construir el prompt
+  prompt="Eres un experto DevOps senior. Convierte este archivo ($file, tipo $TYPE) a GitHub Actions YAML robusto y moderno.
 
 Reglas estrictas:
 - .groovy en vars/ → Composite Action (.github/actions/nombre/action.yml)
@@ -72,7 +86,7 @@ $content"
     -d @- <<EOF
 {
   "model": "$GROQ_MODEL",
-  "messages": [{"role": "user", "content": $(echo "$prompt" | jq -Rsa .)}],
+  "messages": [{"role": "user", "content": $(printf '%s\n' "$prompt" | jq -Rs .)}],
   "temperature": 0.2,
   "max_tokens": 12000
 }
@@ -83,47 +97,23 @@ EOF
   generated=$(echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
   
   if [ -z "$generated" ]; then
-    echo "  ❌ ERROR: Groq no respondió correctamente para $clean_file"
-    mkdir -p "$OUTPUT_BASE"
-    echo "$response" > "$OUTPUT_BASE/error-$(echo "$clean_file" | sed 's/[^a-zA-Z0-9._-]/_/g').json"
+    echo "  ❌ ERROR: Groq no respondió correctamente"
+    echo "$response" > "$OUTPUT_BASE/error-$(basename "$file" | sed 's/[^a-zA-Z0-9._-]/_/g').json"
     continue
   fi
   
   # Crear nombre seguro para el directorio de salida
-  safe_name=$(echo "$clean_file" | sed 's/[^a-zA-Z0-9._-]/_/g' | sed 's/__*/_/g' | sed 's/\.[^.]*$//')
+  safe_name=$(basename "$file" | sed 's/\.[^.]*$//' | sed 's/[^a-zA-Z0-9._-]/_/g')
   output_dir="$OUTPUT_BASE/$safe_name"
   mkdir -p "$output_dir"
   
-  # Dividir YAMLs por --- usando awk
-  echo "$generated" | awk 'BEGIN {file=1; content=""} 
-    /^---$/ {
-      if (content != "") {
-        filename="'$output_dir'/generated_" file ".yml"
-        print content > filename
-        file++
-        content=""
-      }
-      next
-    }
-    {content = content $0 "\n"}
-    END {
-      if (content != "") {
-        filename="'$output_dir'/generated_" file ".yml"
-        print content > filename
-      }
-    }'
+  # Guardar archivo generado
+  echo "$generated" > "$output_dir/generated.yml"
+  echo "  ✓ Guardado en: $output_dir/generated.yml"
   
-  # Contar YAMLs generados
-  yml_count=$(find "$output_dir" -name "generated_*.yml" 2>/dev/null | wc -l)
-  echo "  ✓ Generados $yml_count archivo(s) YAML en $output_dir"
-done
+done <<< "$FILES_TO_MIGRATE"
 
 echo ""
-echo "=== Migración finalizada con Groq ==="
-if [ -d "migrated" ]; then
-  echo "Estructura generada:"
-  find migrated -type f | head -20
-  [ $(find migrated -type f | wc -l) -gt 20 ] && echo "... y más archivos"
-else
-  echo "⚠ No hay archivos migrados"
-fi
+echo "=== Migración finalizada ==="
+find migrated -type f 2>/dev/null | wc -l
+echo " archivos generados"

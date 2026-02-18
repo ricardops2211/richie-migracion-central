@@ -72,7 +72,7 @@ jobs:
       matrix:
         config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout THIS repo (for the migration script)
+      - name: Checkout THIS repo (migration-repo)
         uses: actions/checkout@v4
         with:
           path: migration-repo
@@ -85,15 +85,25 @@ jobs:
           path: source-repo
           token: ${{ secrets.GH_PAT }}
 
-      - name: Buscar archivos
+      - name: Buscar archivos (DEBUG)
         id: find-files
         run: |
-          cd source-repo
-          FILES=$(find . -type f \
-            \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
-            \( -path "*${{ matrix.config.shared_lib_path }}*" -o -path "*${{ matrix.config.jenkins_path }}*" \) \
-            | tr '\n' ' ')
-          echo "files=$FILES" >> $GITHUB_OUTPUT
+          echo "PWD: $(pwd)"
+          echo "Contents of :"
+          ls -la
+          echo ""
+          echo "=== source-repo contents ==="
+          ls -la source-repo/ || echo "source-repo no existe"
+          echo ""
+          echo "=== Buscando archivos ==="
+          FILES=$(find source-repo -type f \( -name "*.groovy" -o -name "Jenkinsfile*" \) -printf '%P\n' 2>/dev/null | sort)
+          
+          echo "Archivos encontrados:"
+          echo "$FILES"
+          echo ""
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Transformar con Groq
         if: steps.find-files.outputs.files != ''
@@ -113,6 +123,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
+          name: migrated-${{ replace(matrix.config.repo, '/', '-') }}-${{ matrix.config.branch }}
           path: migration-repo/migrated/**
           retention-days: 7
