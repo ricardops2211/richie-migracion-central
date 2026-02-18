@@ -71,50 +71,57 @@ while IFS= read -r file || [ -n "$file" ]; do
     continue
   }
   
-  # Construir el prompt
-  read -r -d '' prompt << 'PROMPT_END' || true
-Eres un experto DevOps senior. Convierte este archivo a GitHub Actions YAML.
+  # Extraer nombre base del archivo para usarlo en rutas
+  base_name=$(basename "$file" | sed 's/\.[^.]*$//')
+  
+  # Construir el prompt CON SUSTITUCIONES REALES
+  prompt="Eres un experto DevOps senior. Convierte este archivo a GitHub Actions YAML.
+
+INFORMACIÓN DEL ARCHIVO:
+- Nombre: $file
+- Nombre base: $base_name
+- Tipo: $TYPE
 
 REGLAS CRÍTICAS:
 1. Si generas MÚLTIPLES archivos, sepáralos con '---ARCHIVO_SEPARATOR---'
 2. ANTES de cada YAML, escribe: '##FILE: ruta/del/archivo.yml'
-3. .groovy en vars/ → .github/actions/nombre/action.yml (Composite Action)
-4. Jenkinsfile → .github/workflows/nombre.yml (Reusable Workflow con workflow_call)
-5. Cada archivo debe ser YAML válido y COMPLETO
-6. Siempre incluye: actions/cache, error handling, retry si aplica
-7. NO incluyas explicaciones, SOLO YAML
+3. Reemplaza TODAS las variables:
+   - \${FILE_NAME} → $base_name
+   - \${APP_NAME} → $base_name
+   - No dejes \$file, \$FILE_NAME, \$APP_NAME sin reemplazar
+4. .groovy en vars/ → .github/actions/$base_name/action.yml (Composite Action)
+5. Jenkinsfile → .github/workflows/${base_name}.yml (Reusable Workflow con workflow_call)
+6. Cada archivo debe ser YAML válido y COMPLETO
+7. Siempre incluye: actions/cache, error handling, retry si aplica
+8. NO incluyas explicaciones, SOLO YAML
 
 EJEMPLO DE SALIDA:
-##FILE: .github/actions/miAccion/action.yml
-name: miAccion
-description: Descripción
+##FILE: .github/actions/$base_name/action.yml
+name: $base_name
+description: Descripción de $base_name
 runs:
   using: composite
   steps:
     - name: Step
-      run: echo "hello"
+      run: echo \"Processing $base_name\"
 
 ---ARCHIVO_SEPARATOR---
 
-##FILE: .github/workflows/deploy.yml
-name: deploy
+##FILE: .github/workflows/${base_name}-deploy.yml
+name: ${base_name}-deploy
 on:
   workflow_call:
+    inputs:
+      env:
+        type: string
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
----ARCHIVO_SEPARATOR---
-
-INFORMACIÓN DEL ARCHIVO:
-- Nombre: $file
-- Tipo: $TYPE
-
-Contenido:
-$content
-PROMPT_END
+Contenido a convertir:
+$content"
 
   echo "  Enviando a Groq API..."
   
@@ -187,6 +194,10 @@ PROMPT_END
       ((failed++))
       continue
     }
+    
+    # Reemplazar variables en la salida de Groq
+    generated="${generated//\$base_name/$base_name}"
+    generated="${generated//\${base_name}/$base_name}"
     
     # Procesar la salida con bash en lugar de awk para mejor control
     temp_file=$(mktemp)
