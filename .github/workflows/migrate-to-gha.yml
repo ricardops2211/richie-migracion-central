@@ -119,6 +119,24 @@ jobs:
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
 
+      - name: Debug - Ver si los artifacts existen desde el upload context
+        if: always()
+        run: |
+          echo "Directorio actual (pwd): $(pwd)"
+          echo "github.workspace: ${{ github.workspace }}"
+          echo ""
+          echo "Ruta absoluta que usas en upload:"
+          ls -la /home/runner/work/richie-migracion-central/richie-migracion-central/migration-repo/artifacts 2>&1 || echo "→ No accesible o vacío"
+          echo ""
+          echo "Usando github.workspace:"
+          ls -la ${{ github.workspace }}/migration-repo/artifacts 2>&1 || echo "→ No existe"
+          echo ""
+          echo "Contando archivos reales:"
+          find ${{ github.workspace }}/migration-repo/artifacts -type f 2>/dev/null | wc -l || echo "Error al contar"
+          echo ""
+          echo "Algunos archivos (head):"
+          find ${{ github.workspace }}/migration-repo/artifacts -type f 2>/dev/null | head -n 15 || true
+
       - name: Mover artifacts para upload seguro
         if: always()
         run: |
