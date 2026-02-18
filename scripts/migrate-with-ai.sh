@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -uo pipefail  # Quitamos -e para manejar errores manualmente
+set -uo pipefail
 
 # Variables requeridas desde el workflow
 GROQ_API_KEY="${GROQ_API_KEY:-}"
@@ -188,63 +188,77 @@ PROMPT_END
       continue
     }
     
-    # Procesar la salida con awk para dividir archivos
-    echo "$generated" | awk -v outdir="$output_dir" '
-      BEGIN {
-        file_count = 0
-        current_file = ""
-        content = ""
-      }
-      /^---ARCHIVO_SEPARATOR---$/ {
-        if (current_file != "") {
-          filename = outdir "/" file_count "_" current_file
-          gsub(/[^a-zA-Z0-9._\/-]/, "_", filename)
-          print content > filename
-          close(filename)
-          print "    ✓ " filename
-        }
-        file_count = 0
-        current_file = ""
-        content = ""
-        next
-      }
-      /^##FILE:/ {
-        if (current_file != "") {
-          filename = outdir "/" file_count "_" current_file
-          gsub(/[^a-zA-Z0-9._\/-]/, "_", filename)
-          print content > filename
-          close(filename)
-          print "    ✓ " filename
-          file_count++
-        }
-        current_file = $0
-        gsub(/^##FILE:[ \t]*/, "", current_file)
-        gsub(/[ \t]*$/, "", current_file)
-        content = ""
-        next
-      }
-      {
-        if (current_file != "") {
-          content = content $0 "\n"
-        }
-      }
-      END {
-        if (current_file != "") {
-          filename = outdir "/" file_count "_" current_file
-          gsub(/[^a-zA-Z0-9._\/-]/, "_", filename)
-          print content > filename
-          close(filename)
-          print "    ✓ " filename
-        }
-      }
-    ' || {
-      echo "  ❌ Error procesando archivos"
-      ((failed++))
-      continue
-    }
+    # Procesar la salida con bash en lugar de awk para mejor control
+    temp_file=$(mktemp)
+    echo "$generated" > "$temp_file"
     
-    echo "  ✓ Completado"
-    ((processed++))
+    # Usar bash para procesar línea por línea
+    current_file=""
+    content=""
+    file_count_local=0
+    
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [ "$line" = "---ARCHIVO_SEPARATOR---" ]; then
+        # Guardar archivo anterior
+        if [ -n "$current_file" ]; then
+          target_path="$output_dir/$current_file"
+          target_dir=$(dirname "$target_path")
+          mkdir -p "$target_dir" || {
+            echo "  ⚠ No se pudo crear $target_dir"
+            continue
+          }
+          echo "$content" > "$target_path"
+          echo "    ✓ $current_file"
+          ((file_count_local++))
+        fi
+        current_file=""
+        content=""
+      elif [[ "$line" =~ ^##FILE:\ * ]]; then
+        # Guardar archivo anterior
+        if [ -n "$current_file" ]; then
+          target_path="$output_dir/$current_file"
+          target_dir=$(dirname "$target_path")
+          mkdir -p "$target_dir" || {
+            echo "  ⚠ No se pudo crear $target_dir"
+            continue
+          }
+          echo "$content" > "$target_path"
+          echo "    ✓ $current_file"
+          ((file_count_local++))
+        fi
+        # Extraer nuevo nombre de archivo
+        current_file="${line#*##FILE: }"
+        current_file="${current_file# }"
+        content=""
+      else
+        # Acumular contenido
+        if [ -n "$current_file" ]; then
+          content+="$line"$'\n'
+        fi
+      fi
+    done < "$temp_file"
+    
+    # Guardar último archivo
+    if [ -n "$current_file" ]; then
+      target_path="$output_dir/$current_file"
+      target_dir=$(dirname "$target_path")
+      mkdir -p "$target_dir" || {
+        echo "  ⚠ No se pudo crear $target_dir"
+      }
+      echo "$content" > "$target_path"
+      echo "    ✓ $current_file"
+      ((file_count_local++))
+    fi
+    
+    rm -f "$temp_file"
+    
+    if [ $file_count_local -gt 0 ]; then
+      echo "  ✓ Completado ($file_count_local archivo(s))"
+      ((processed++))
+    else
+      echo "  ⚠ No se generaron archivos"
+      ((failed++))
+    fi
     
     if [ $((processed + failed)) -lt $file_count ]; then
       sleep "$RATE_LIMIT_DELAY"
@@ -267,11 +281,10 @@ echo ""
 if [ -d "migrated" ]; then
   total_files=$(find migrated -type f 2>/dev/null | wc -l)
   echo "$total_files archivos generados:"
-  find migrated -type f | head -20 | sed 's/^/  /'
-  [ $(find migrated -type f | wc -l) -gt 20 ] && echo "  ... y más"
+  find migrated -type f | head -30 | sed 's/^/  /'
+  [ $(find migrated -type f | wc -l) -gt 30 ] && echo "  ... y más"
 else
   echo "⚠ No hay archivos migrados"
 fi
 
-# Retornar código de error si hubo fallos
-[ $failed -eq 0 ] && exit 0 || exit 0  # Permitir que el workflow continúe
+exit 0
