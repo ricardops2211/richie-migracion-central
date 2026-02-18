@@ -115,37 +115,19 @@ jobs:
 
       - name: Preparar nombre de artifact
         id: artifact-name
-        if: always()
         run: |
+          # Convertir / a - usando sed
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
-
-      - name: Listar archivos generados
-        if: always()
-        working-directory: migration-repo
-        run: |
-          echo "Archivos en artifacts/:"
-          find artifacts -type f | wc -l
-          find artifacts -type f | head -10
-
-      - name: Debug real path
-        run: |
-          echo "PWD:"
-          pwd
-          echo "Workspace:"
-          echo $GITHUB_WORKSPACE
-          echo "Listando artifacts:"
-          ls -R artifacts || true
 
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: artifacts
+          path: migration-repo/migrated
           if-no-files-found: warn
           retention-days: 7
-
 
 
 
