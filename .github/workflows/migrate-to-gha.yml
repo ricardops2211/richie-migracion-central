@@ -137,21 +137,21 @@ jobs:
           echo "Algunos archivos (head):"
           find ${{ github.workspace }}/migration-repo/artifacts -type f 2>/dev/null | head -n 15 || true
 
-      - name: Mover artifacts para upload seguro
+      - name: Crear ZIP de artifacts
         if: always()
         run: |
-          mkdir -p /home/runner/artifacts-temp
-          cp -r ${{ github.workspace }}/migration-repo/artifacts/* /home/runner/artifacts-temp/ || true
+          cd ${{ github.workspace }}/migration-repo
+          zip -r ../migration-artifacts.zip artifacts
+          ls -l ../migration-artifacts.zip   # para confirmar que el zip se creó y tiene tamaño >0
 
-      - name: Subir Artifacts
+      - name: Subir el ZIP como artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: /home/runner/artifacts-temp
+          path: ${{ github.workspace }}/migration-artifacts.zip
           if-no-files-found: warn
           retention-days: 7
-
 
 
 
