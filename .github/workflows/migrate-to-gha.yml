@@ -113,23 +113,19 @@ jobs:
           chmod +x ./scripts/migrate-with-ai.sh
           ./scripts/migrate-with-ai.sh
 
-      - name: Verificar artifacts generados
-        if: always()
-        run: |
-          echo "PWD: $(pwd)"
-          echo ""
-          echo "Contenido de artifacts:"
-          ls -la artifacts || echo "No existe artifacts"
-          echo ""
-          echo "Total archivos:"
-          find artifacts -type f 2>/dev/null | wc -l
-
       - name: Preparar nombre de artifact
         id: artifact-name
         if: always()
         run: |
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
+
+      - name: Listar archivos generados
+        if: always()
+        run: |
+          echo "Archivos en artifacts/:"
+          find artifacts -type f | wc -l
+          find artifacts -type f | head -10
 
       - name: Subir Artifacts
         if: always()
