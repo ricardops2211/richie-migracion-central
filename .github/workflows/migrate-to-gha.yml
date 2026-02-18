@@ -1,4 +1,4 @@
-name: Migración Automatizada a GitHub Actions (con Groq)
+name: Migración Automatizada a GitHub Actions
 
 on:
   push:
