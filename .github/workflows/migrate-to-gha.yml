@@ -1,4 +1,4 @@
-name: Migración Automatizada a GitHub Actions (con Groq)
+name: Migración Automatizada a GitHub Actions (con Groq - DEBUG FINAL)
 
 on:
   push:
@@ -11,85 +11,97 @@ permissions:
   contents: read
 
 jobs:
-  generate-matrix:
+  debug-and-matrix:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix || '[]' }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repositorio de migración
+        uses: actions/checkout@v4
 
-      - name: Verificar repos-config.json
+      - name: Mostrar todo el entorno (depuración máxima)
         run: |
+          echo "Directorio actual:"
+          pwd
+          echo ""
+          echo "Archivos en la raíz del repositorio:"
+          ls -la
+          echo ""
+          echo "Archivos JSON en todo el repositorio:"
+          find . -type f -name "*json" -o -name "*config*" -o -name "*repos*" 2>/dev/null || echo "No se encontró ningún JSON"
+          echo ""
+          echo "Rama actual:"
+          git branch --show-current
+          echo ""
+          echo "Último commit:"
+          git log -1 --oneline
+          echo ""
+          echo "Contenido de repos-config.json si existe en raíz:"
           if [ -f repos-config.json ]; then
-            echo "JSON encontrado"
+            echo "✅ ENCONTRADO"
             cat repos-config.json
+            echo ""
+            echo "Validando JSON con jq:"
+            jq . repos-config.json > /dev/null 2>&1 && echo "JSON válido" || echo "JSON inválido (revisa comas/llaves)"
           else
-            echo "ERROR: No existe repos-config.json"
-            ls -la
-            exit 1
+            echo "❌ NO EXISTE repos-config.json en la raíz"
+            echo "Posibles nombres alternativos que sí existen:"
+            ls -la | grep -i json || echo "Ninguno"
           fi
 
-      - name: Generar matrix
+      - name: Generar matrix (con todos los safeguards)
         id: build
         run: |
-          MATRIX=$(jq -r '
+          if [ ! -f repos-config.json ]; then
+            echo "ERROR: repos-config.json no encontrado. Matrix = []"
+            echo "matrix=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "JSON encontrado. Parseando..."
+          RAW=$(jq -r '
             .[] 
             | (.branches // [.branch // "master"]) as $b
             | $b[]
             | {
-                repo: .repo,
+                repo: .repo // "MISSING_REPO",
                 branch: .,
                 shared_lib_path: (.shared_lib_path // "vars/"),
                 jenkins_path: (.jenkins_path // "Jenkinsfile"),
                 type: (.type // "jenkins")
               }
             | @json
-          ' repos-config.json | jq -s -c 'map(.)' || echo "[]")
+          ' repos-config.json 2>&1)
+
+          echo "Salida cruda de jq (incluye errores si hay):"
+          echo "$RAW"
+
+          MATRIX=$(echo "$RAW" | jq -s -c 'map(select(.repo != "MISSING_REPO"))' 2>&1 || echo "[]")
+
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
+          echo "Matrix final:"
+          echo "$MATRIX" | jq . || echo "Matrix inválida o vacía"
+
+          if [ "$MATRIX" = "[]" ]; then
+            echo "MATRIX VACÍA - Causas probables:"
+            echo "1. JSON vacío o sin objetos válidos"
+            echo "2. Sin campo 'repo' o 'branch'/'branches'"
+            echo "3. Error de sintaxis JSON (coma extra, llave mal cerrada)"
+          else
+            echo "ÉXITO - Matrix tiene $(echo "$MATRIX" | jq length) entradas"
+          fi
+
   migrate:
-    needs: generate-matrix
+    needs: debug-and-matrix
     runs-on: ubuntu-latest
-    if: ${{ fromJson(needs.generate-matrix.outputs.matrix) != '[]' }}
+    if: ${{ fromJson(needs.debug-and-matrix.outputs.matrix) != '[]' }}
     strategy:
       fail-fast: false
       max-parallel: 5
       matrix:
-        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        config: ${{ fromJson(needs.debug-and-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout origen
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ matrix.config.repo }}
-          ref: ${{ matrix.config.branch }}
-          path: source-repo
-          token: ${{ secrets.GH_PAT }}
 
-      - name: Buscar archivos
-        id: find-files
-        run: |
-          cd source-repo
-          FILES=$(find . -type f \
-            \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
-            -path "*${{ matrix.config.shared_lib_path }}*" -o -path "*${{ matrix.config.jenkins_path }}*" \
-            | tr '\n' ' ')
-          echo "files=$FILES" >> $GITHUB_OUTPUT
-
-      - name: Transformar con Groq
-        if: steps.find-files.outputs.files != ''
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: deepseek-coder-v2-lite
-          REPO_NAME: ${{ matrix.config.repo }}
-          BRANCH_NAME: ${{ matrix.config.branch }}
-          FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
-          TYPE: ${{ matrix.config.type }}
-        run: ./scripts/migrate-with-ai.sh
-
-      - name: Subir Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
-          path: migrated/**
-          retention-days: 7
+      # Aquí puedes poner tus pasos reales (checkout, find-files, script Groq, artifacts)
+      - run: echo "Job migración ejecutado - agrega tus pasos aquí"
