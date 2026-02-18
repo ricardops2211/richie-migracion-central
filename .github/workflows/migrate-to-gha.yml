@@ -116,19 +116,18 @@ jobs:
       - name: Preparar nombre de artifact
         id: artifact-name
         run: |
-          # Convertir / a - usando sed
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
 
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
+        # ¡NO pongas working-directory aquí!
         with:
           name: ${{ steps.artifact-name.outputs.name }}
           path: migration-repo/artifacts
           if-no-files-found: warn
           retention-days: 7
-
 
 
 
