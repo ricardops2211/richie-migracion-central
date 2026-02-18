@@ -17,5 +17,11 @@
     "branch": "master",
     "shared_lib_path": "templates/",
     "type": "azure"
+  },
+  {
+    "repo": "ricardops2211/richie-jenkins-shared-lib",
+    "branches": ["databricks"],
+    "shared_lib_path": "vars/",
+    "type": "jenkins"
   }
 ]
