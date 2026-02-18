@@ -15,6 +15,7 @@ echo "REPO_NAME: $REPO_NAME"
 echo "BRANCH_NAME: $BRANCH_NAME"
 echo "FILES_TO_MIGRATE: $FILES_TO_MIGRATE"
 echo "TYPE: $TYPE"
+echo "PWD: $(pwd)"
 echo "==================="
 
 if [ -z "$GROQ_API_KEY" ]; then
@@ -27,34 +28,44 @@ if [ -z "$FILES_TO_MIGRATE" ]; then
   exit 0
 fi
 
+# IMPORTANTE: El script se ejecuta desde migration-repo con working-directory
+# pero los archivos están en ../source-repo
+SOURCE_REPO_PATH="../source-repo"
+
+echo "DEBUG: Verificando rutas:"
+echo "  PWD actual: $(pwd)"
+echo "  Existe $SOURCE_REPO_PATH: $([ -d "$SOURCE_REPO_PATH" ] && echo "SÍ" || echo "NO")"
+echo "  Contenido de $SOURCE_REPO_PATH:"
+ls -la "$SOURCE_REPO_PATH" 2>/dev/null || echo "    (no encontrado)"
+echo ""
+
 OUTPUT_BASE="migrated/${REPO_NAME}/${BRANCH_NAME}"
 mkdir -p "$OUTPUT_BASE"
 
 # Debug: mostrar archivos en source-repo
-echo "DEBUG: Contenido de source-repo:"
-find source-repo -type f \( -name "*.groovy" -o -name "Jenkinsfile*" \) 2>/dev/null || echo "  (ninguno encontrado)"
+echo "DEBUG: Buscando archivos Groovy:"
+find "$SOURCE_REPO_PATH" -type f \( -name "*.groovy" -o -name "Jenkinsfile*" \) 2>/dev/null | head -10 || echo "  (ninguno encontrado)"
 echo ""
 
 while IFS= read -r file; do
   # Saltar líneas vacías
   [ -z "$file" ] && continue
   
-  # Limpiar espacios
+  # Limpiar espacios en blanco
   file=$(echo "$file" | xargs)
   
   echo "→ Procesando: $file"
   
-  # Construir ruta completa
-  full_path="source-repo/$file"
+  # Construir ruta completa (la ruta ya viene sin ./)
+  full_path="$SOURCE_REPO_PATH/$file"
   
-  # Eliminar ./ si existe
-  full_path="${full_path//\.\//}"
+  echo "  Buscando en: $full_path"
   
   # Verificar que el archivo existe
   if [ ! -f "$full_path" ]; then
     echo "  ⚠ Archivo no encontrado: $full_path"
     mkdir -p "$OUTPUT_BASE"
-    echo "{\"error\": \"File not found: $full_path\", \"searched_at\": \"$(pwd)/$full_path\"}" > "$OUTPUT_BASE/error-$(basename "$file" | sed 's/[^a-zA-Z0-9._-]/_/g').json"
+    echo "{\"error\": \"File not found: $full_path\", \"pwd\": \"$(pwd)\"}" > "$OUTPUT_BASE/error-$(basename "$file" | sed 's/[^a-zA-Z0-9._-]/_/g').json"
     continue
   fi
   
@@ -98,6 +109,8 @@ EOF
   
   if [ -z "$generated" ]; then
     echo "  ❌ ERROR: Groq no respondió correctamente"
+    error_msg=$(echo "$response" | jq -r '.error.message // "Unknown error"' 2>/dev/null || echo "JSON parse error")
+    echo "  Error: $error_msg"
     echo "$response" > "$OUTPUT_BASE/error-$(basename "$file" | sed 's/[^a-zA-Z0-9._-]/_/g').json"
     continue
   fi
@@ -115,5 +128,11 @@ done <<< "$FILES_TO_MIGRATE"
 
 echo ""
 echo "=== Migración finalizada ==="
-find migrated -type f 2>/dev/null | wc -l
-echo " archivos generados"
+if [ -d "migrated" ]; then
+  file_count=$(find migrated -type f 2>/dev/null | wc -l)
+  echo "$file_count archivos generados"
+  echo "Estructura:"
+  find migrated -type f | sed 's/^/  /'
+else
+  echo "No hay archivos migrados"
+fi
