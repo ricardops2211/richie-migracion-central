@@ -124,10 +124,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.artifact-name.outputs.name }}
-          path: migration-repo/artifacts
-          if-no-files-found: warn
-          retention-days: 7
+          name: test-upload
+          path: .
+          retention-days: 1
+
 
 
 
