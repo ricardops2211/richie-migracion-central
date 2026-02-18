@@ -150,22 +150,20 @@ jobs:
           echo ""
           echo "=== Contenido de migration-repo/migrated ==="
           ls -laR migration-repo/migrated 2>/dev/null | head -50 || echo "No existe"
-          echo ""
-          echo "=== Total de archivos ==="
-          find migration-repo/migrated -type f 2>/dev/null | wc -l
 
       - name: Copiar artifacts al workspace raíz
         if: always()
+        shell: bash
         run: |
           echo "Copiando archivos..."
-          mkdir -p artifacts
-          cp -r migration-repo/migrated/* artifacts/ 2>/dev/null || true
+          mkdir -p "${{ runner.workspace }}/artifacts"
+          cp -rv migration-repo/migrated/* "${{ runner.workspace }}/artifacts/" 2>/dev/null || true
           echo ""
-          echo "Contenido de artifacts:"
-          find artifacts -type f | head -20
+          echo "Verificando copia:"
+          ls -la "${{ runner.workspace }}/artifacts/"
           echo ""
-          echo "Total archivos copiados:"
-          find artifacts -type f 2>/dev/null | wc -l
+          echo "Total archivos:"
+          find "${{ runner.workspace }}/artifacts" -type f 2>/dev/null | wc -l
 
       - name: Preparar nombre de artifact
         id: artifact-name
@@ -179,5 +177,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: artifacts/
+          path: ${{ runner.workspace }}/artifacts/
           retention-days: 7
