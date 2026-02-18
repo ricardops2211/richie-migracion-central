@@ -151,5 +151,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: migration-repo/migrated/**
+          path: migration-repo/migrated/
           retention-days: 7
