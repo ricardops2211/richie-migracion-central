@@ -1,32 +1,98 @@
-name: AI Multi-Repo Migration
+name: Migración Automatizada a GitHub Actions (con IA)
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      config_file:
+        description: 'Archivo JSON'
+        default: 'repos-config.json'
+
+permissions:
+  contents: read
 
 jobs:
-  migrate:
+  generate-matrix:
     runs-on: ubuntu-latest
-
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix || '[]' }}
     steps:
-      - name: Checkout Migrator Repo
+      - uses: actions/checkout@v4
+
+      - name: Verificar JSON
+        run: |
+          if [ -f repos-config.json ]; then
+            echo "JSON encontrado"
+            cat repos-config.json
+          else
+            echo "ERROR: No se encuentra repos-config.json"
+            ls -la
+            exit 1
+          fi
+
+      - name: Generar matrix
+        id: build
+        run: |
+          MATRIX=$(jq -r '
+            .[] 
+            | (.branches // [.branch // "main"]) as $b
+            | $b[]
+            | {
+                repo: .repo,
+                branch: .,
+                shared_lib_path: (.shared_lib_path // "vars/"),
+                jenkins_path: (.jenkins_path // "Jenkinsfile"),
+                type: (.type // "jenkins")
+              }
+            | @json
+          ' repos-config.json | jq -s -c 'map(.)' || echo "[]")
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  migrate:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    if: ${{ fromJson(needs.generate-matrix.outputs.matrix) != '[]' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout origen
         uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.config.repo }}
+          ref: ${{ matrix.config.branch }}
+          path: source-repo
+          token: ${{ secrets.GH_PAT }}
 
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Buscar archivos
+        id: find-files
+        run: |
+          cd source-repo
+          FILES=$(find . -type f \
+            \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
+            -path "*${{ matrix.config.shared_lib_path }}*" -o -path "*${{ matrix.config.jenkins_path }}*" \
+            | tr '\n' ' ')
+          echo "files=$FILES" >> $GITHUB_OUTPUT
 
-      - name: Make script executable
-        run: chmod +x scripts/migrate-with-ai.sh
-
-      - name: Run Migration
-        run: ./scripts/migrate-with-ai.sh
+      - name: Transformar con IA
+        if: steps.find-files.outputs.files != ''
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: gpt-4.1
+          OPENAI_MODEL: gpt-4o
+          REPO_NAME: ${{ matrix.config.repo }}
+          BRANCH_NAME: ${{ matrix.config.branch }}
+          FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
+          TYPE: ${{ matrix.config.type }}
+        run: ./scripts/migrate-with-ai.sh
 
-      - name: Upload Results
+      - name: Subir Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migrated-results
-          path: migrated/
+          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
+          path: migrated/**
+          retention-days: 7
