@@ -6,10 +6,6 @@ on:
       - main
       - master
   workflow_dispatch:
-    inputs:
-      config_file:
-        description: 'Archivo JSON'
-        default: 'repos-config.json'
 
 permissions:
   contents: read
@@ -22,13 +18,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verificar JSON
+      - name: Verificar y validar JSON
         run: |
           if [ -f repos-config.json ]; then
-            echo "JSON encontrado:"
-            cat repos-config.json
+            echo "JSON encontrado en raíz"
+            echo "Contenido crudo:"
+            cat -v repos-config.json  # muestra caracteres ocultos
+            echo ""
+            echo "Validando JSON..."
+            jq . repos-config.json > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+              echo "JSON válido"
+              cat repos-config.json
+            else
+              echo "ERROR: JSON inválido - jq falló"
+              jq . repos-config.json  # muestra el error exacto
+              exit 1
+            fi
           else
-            echo "ERROR: repos-config.json no existe"
+            echo "ERROR: repos-config.json NO existe"
             ls -la
             exit 1
           fi
@@ -48,8 +56,17 @@ jobs:
                 type: (.type // "jenkins")
               }
             | @json
-          ' repos-config.json | jq -s -c 'map(.)' || echo "[]")
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          ' repos-config.json 2>&1)
+
+          echo "Salida cruda de jq:"
+          echo "$MATRIX"
+
+          MATRIX_CLEAN=$(echo "$MATRIX" | jq -s -c 'map(.)' 2>&1 || echo "[]")
+
+          echo "matrix=$MATRIX_CLEAN" >> $GITHUB_OUTPUT
+
+          echo "Matrix final (entradas: $(echo "$MATRIX_CLEAN" | jq length || echo 0)):"
+          echo "$MATRIX_CLEAN" | jq . || echo "Matrix vacía"
 
   migrate:
     needs: generate-matrix
