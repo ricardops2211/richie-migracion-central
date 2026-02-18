@@ -21,7 +21,7 @@
   {
     "repo": "ricardops2211/richie-jenkins-shared-lib",
     "branches": ["databricks"],
-    "shared_lib_path": "vars/",
+    "shared_lib_path": ["vars/", "src/"],
     "type": "jenkins"
   }
 ]
