@@ -3,12 +3,9 @@ name: Migración Automatizada a GitHub Actions (con IA)
 on:
   push:
     branches:
+      - master
       - main
   workflow_dispatch:
-    inputs:
-      config_file:
-        description: 'Archivo JSON'
-        default: 'repos-config.json'
 
 permissions:
   contents: read
@@ -21,23 +18,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verificar JSON
+      - name: Verificar repos-config.json
         run: |
           if [ -f repos-config.json ]; then
-            echo "JSON encontrado"
+            echo "JSON encontrado:"
             cat repos-config.json
+            echo ""
+            echo "Validando sintaxis JSON..."
+            jq . repos-config.json > /dev/null && echo "JSON válido" || echo "JSON inválido - revisa comas/llaves"
           else
-            echo "ERROR: No se encuentra repos-config.json"
+            echo "ERROR: repos-config.json NO existe en la raíz"
             ls -la
             exit 1
           fi
 
-      - name: Generar matrix
+      - name: Generar matrix dinámica
         id: build
         run: |
           MATRIX=$(jq -r '
             .[] 
-            | (.branches // [.branch // "main"]) as $b
+            | (.branches // [.branch // "master"]) as $b
             | $b[]
             | {
                 repo: .repo,
@@ -47,8 +47,14 @@ jobs:
                 type: (.type // "jenkins")
               }
             | @json
-          ' repos-config.json | jq -s -c 'map(.)' || echo "[]")
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          ' repos-config.json 2>&1 || echo "[]")
+
+          MATRIX_CLEAN=$(echo "$MATRIX" | jq -s -c 'map(.)' 2>&1 || echo "[]")
+
+          echo "matrix=$MATRIX_CLEAN" >> $GITHUB_OUTPUT
+
+          echo "Matrix generada (longitud: $(echo "$MATRIX_CLEAN" | jq length)):"
+          echo "$MATRIX_CLEAN" | jq . || echo "No se pudo mostrar"
 
   migrate:
     needs: generate-matrix
@@ -60,7 +66,7 @@ jobs:
       matrix:
         config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     steps:
-      - name: Checkout origen
+      - name: Checkout repositorio origen
         uses: actions/checkout@v4
         with:
           repository: ${{ matrix.config.repo }}
@@ -73,8 +79,12 @@ jobs:
         run: |
           cd source-repo
           FILES=$(find . -type f \
-            \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
-            -path "*${{ matrix.config.shared_lib_path }}*" -o -path "*${{ matrix.config.jenkins_path }}*" \
+            \( -name "*.groovy" \
+            -o -name "Jenkinsfile*" \
+            -o -name "*.yml" \
+            -o -name "*.yaml" \) \
+            -path "*${{ matrix.config.shared_lib_path }}*" \
+            -o -path "*${{ matrix.config.jenkins_path }}*" \
             | tr '\n' ' ')
           echo "files=$FILES" >> $GITHUB_OUTPUT
 
