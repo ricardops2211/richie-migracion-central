@@ -120,13 +120,14 @@ jobs:
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
 
-      - name: Subir Artifacts
+      - name: Subir Artifacts directo
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-upload
-          path: .
+          name: direct-test
+          path: migration-repo/artifacts/ricardops2211
           retention-days: 1
+
 
 
 
