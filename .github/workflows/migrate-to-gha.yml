@@ -139,6 +139,18 @@ jobs:
           chmod +x ./scripts/migrate-with-ai.sh
           ./scripts/migrate-with-ai.sh
 
+      - name: Debug - Listar archivos antes de upload
+        if: always()
+        run: |
+          echo "=== Contenido de migration-repo/migrated ==="
+          ls -la migration-repo/migrated/ 2>/dev/null || echo "No existe"
+          echo ""
+          echo "=== Buscando archivos recursivamente ==="
+          find migration-repo/migrated -type f 2>/dev/null | head -20
+          echo ""
+          echo "=== Total de archivos ==="
+          find migration-repo/migrated -type f 2>/dev/null | wc -l
+
       - name: Preparar nombre de artifact
         id: artifact-name
         if: always()
