@@ -1,114 +1,80 @@
-name: Migración Automatizada a GitHub Actions (con IA)
+#!/usr/bin/env bash
+set -euo pipefail
 
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'repos-config.json'
-      - '.github/workflows/migrate-to-gha.yaml'
-      - 'scripts/migrate-with-ai.sh'
+# Variables requeridas desde el workflow
+: "${OPENAI_API_KEY:?Falta OPENAI_API_KEY}"
+: "${OPENAI_MODEL:=gpt-4o}"
+: "${REPO_NAME:?Falta REPO_NAME}"
+: "${BRANCH_NAME:?Falta BRANCH_NAME}"
+: "${FILES_TO_MIGRATE:?Falta FILES_TO_MIGRATE}"
+: "${TYPE:?Falta TYPE (jenkins/azure)}"
 
-  workflow_dispatch:
+OUTPUT_BASE="migrated/${REPO_NAME}/${BRANCH_NAME}"
+mkdir -p "$OUTPUT_BASE"
 
-permissions:
-  contents: read
+echo "Iniciando migración con IA para ${REPO_NAME}@${BRANCH_NAME}"
+echo "Archivos a procesar: ${FILES_TO_MIGRATE}"
 
-jobs:
-  generate-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.build.outputs.matrix || '[]' }}
-    steps:
-      - name: Checkout repositorio de migración
-        uses: actions/checkout@v4
+for file in ${FILES_TO_MIGRATE}; do
+  rel_path="${file#./}"
+  echo "→ Procesando: ${rel_path}"
 
-      - name: Verificar y mostrar repos-config.json
-        run: |
-          if [ -f repos-config.json ]; then
-            echo "✅ repos-config.json encontrado"
-            echo "Contenido:"
-            cat repos-config.json
-            echo ""
-            echo "Validando JSON..."
-            jq . repos-config.json > /dev/null && echo "JSON válido" || echo "ERROR: JSON inválido"
-          else
-            echo "❌ ERROR: repos-config.json NO existe en la raíz"
-            ls -la
-            exit 1
-          fi
+  content=$(cat "source-repo/${file}" | jq -Rsa .)
 
-      - name: Generar matrix dinámica
-        id: build
-        run: |
-          MATRIX=$(jq -r '
-            .[] 
-            | (.branches // [.branch // "main"]) as $b
-            | $b[]
-            | {
-                repo: .repo,
-                branch: .,
-                shared_lib_path: (.shared_lib_path // "vars/"),
-                jenkins_path: (.jenkins_path // "Jenkinsfile"),
-                type: (.type // "jenkins")
-              }
-            | @json
-          ' repos-config.json | jq -s -c 'map(.)' || echo "[]")
+  prompt=$(cat <<'EOP'
+Eres un experto DevOps senior con 15+ años de experiencia migrando CI/CD.
 
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+Convierte este archivo completo (${rel_path}, tipo ${TYPE}) a GitHub Actions YAML moderno y robusto.
 
-          echo "Matrix generada:"
-          echo "$MATRIX" | jq . || echo "Matrix vacía o inválida"
+Reglas estrictas:
+- Si es .groovy en vars/: genera Composite Action (.github/actions/nombre/action.yml) con inputs y steps equivalentes.
+- Si es clase en src/ (Groovy/Java): traduce lógica a steps run: bash o java.
+- Si es Jenkinsfile o azure-pipelines.yml: genera Reusable Workflow (.github/workflows/nombre.yml) con workflow_call, inputs, secrets: inherit.
+- Siempre incluye: actions/cache para dependencias, manejo de errores (continue-on-error, retry si aplica), matrix cuando tenga sentido, condiciones if:.
+- Genera uno o varios archivos YAML separados por --- (cada uno con su nombre sugerido en comentario inicial).
+- Devuelve SOLO código YAML válido, sin texto adicional ni explicaciones.
 
-  migrate:
-    needs: generate-matrix
-    runs-on: ubuntu-latest
-    if: ${{ fromJson(needs.generate-matrix.outputs.matrix) != '[]' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 5
-      matrix:
-        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    steps:
-      - name: Checkout repositorio origen (${{ matrix.config.repo }} @ ${{ matrix.config.branch }})
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ matrix.config.repo }}
-          ref: ${{ matrix.config.branch }}
-          path: source-repo
-          token: ${{ secrets.GH_PAT }}
+Contenido del archivo:
+$content
+EOP
+  )
 
-      - name: Buscar archivos relevantes
-        id: find-files
-        run: |
-          cd source-repo
-          FILES=$(find . -type f \
-            \( -name "*.groovy" \
-            -o -name "Jenkinsfile*" \
-            -o -name "*.yml" \
-            -o -name "*.yaml" \) \
-            -path "*${{ matrix.config.shared_lib_path }}*" \
-            -o -path "*${{ matrix.config.jenkins_path }}*" \
-            | tr '\n' ' ')
-          echo "files=$FILES" >> $GITHUB_OUTPUT
-          echo "Archivos encontrados: $FILES"
+  response=$(curl -s https://api.openai.com/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+    -d '{
+      "model": "'"${OPENAI_MODEL}"'",
+      "messages": [{"role": "user", "content": "'"${prompt}"'"}],
+      "temperature": 0.2,
+      "max_tokens": 12000
+    }')
 
-      - name: Ejecutar migración con IA (script separado)
-        if: steps.find-files.outputs.files != ''
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-4o' }}
-          REPO_NAME: ${{ matrix.config.repo }}
-          BRANCH_NAME: ${{ matrix.config.branch }}
-          FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
-          TYPE: ${{ matrix.config.type }}
-        run: ./scripts/migrate-with-ai.sh
+  generated=$(echo "${response}" | jq -r '.choices[0].message.content // empty')
 
-      - name: Subir resultados como Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
-          path: migrated/**
-          if-no-files-found: warn
-          retention-days: 7
+  if [ -z "${generated}" ]; then
+    echo "ERROR: respuesta vacía de OpenAI para ${rel_path}"
+    echo "${response}" > "${OUTPUT_BASE}/error-${rel_path}.json"
+    continue
+  fi
+
+  safe_name=$(echo "${rel_path}" | sed 's/[^a-zA-Z0-9._-]/_/g' | sed 's/__*/_/g' | sed 's/\.[^.]*$//')
+  output_dir="${OUTPUT_BASE}/${safe_name}"
+  mkdir -p "${output_dir}"
+
+  echo "${generated}" | csplit -f "part-" -n 2 -s '/^---$/' '{*}'
+
+  i=1
+  for part in part-*; do
+    if [ -s "${part}" ]; then
+      target="${output_dir}/generated_${i}.yml"
+      mv "${part}" "${target}"
+      echo "  Generado: ${target}"
+      ((i++))
+    else
+      rm "${part}"
+    fi
+  done
+done
+
+echo "Migración finalizada para ${REPO_NAME}@${BRANCH_NAME}"
+ls -R migrated/ || echo "No se generaron archivos"
