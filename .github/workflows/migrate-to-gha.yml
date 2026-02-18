@@ -1,4 +1,4 @@
-name: Migración Automatizada a GitHub Actions
+name: Migración Automatizadas a GitHub Actions
 
 on:
   push:
