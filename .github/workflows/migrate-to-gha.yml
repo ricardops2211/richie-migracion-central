@@ -71,6 +71,7 @@ jobs:
       max-parallel: 5
       matrix:
         config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+
     steps:
       - name: Checkout THIS repo (migration-repo)
         uses: actions/checkout@v4
@@ -89,37 +90,14 @@ jobs:
         id: find-files
         shell: bash
         run: |
-          echo "=== DEBUG: Estructura de directorios ==="
-          echo "PWD: $(pwd)"
-          echo ""
-          echo "=== source-repo ==="
-          ls -la source-repo/ || echo "No existe"
-          echo ""
-          echo "=== Buscando archivos ==="
-          
-          # Buscar todos los archivos relevantes
           FILES=$(find source-repo -type f \
             \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
             -not -path "*/.git/*" \
             -printf '%P\n' 2>/dev/null | sort)
-          
-          echo "Archivos encontrados:"
-          echo "$FILES"
-          echo ""
-          
-          # Guardar en output usando delimitador EOF
-          echo "files<<HEREDOC" >> $GITHUB_OUTPUT
-          echo "$FILES" >> $GITHUB_OUTPUT
-          echo "HEREDOC" >> $GITHUB_OUTPUT
-          
-          echo "Output guardado correctamente"
 
-      - name: Debug output
-        run: |
-          echo "FILES_OUTPUT:"
-          echo "${{ steps.find-files.outputs.files }}"
-          echo "---"
-          echo "${{ steps.find-files.outputs.files }}" | wc -l
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Transformar con Groq
         if: steps.find-files.outputs.files != ''
@@ -132,38 +110,19 @@ jobs:
           FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
           TYPE: ${{ matrix.config.type }}
         run: |
-          echo "=== DEBUG FILES_TO_MIGRATE ==="
-          echo "$FILES_TO_MIGRATE"
-          echo "=== FIN DEBUG ==="
-          echo ""
           chmod +x ./scripts/migrate-with-ai.sh
           ./scripts/migrate-with-ai.sh
 
-      - name: Debug - Listar archivos antes de upload
+      - name: Verificar artifacts generados
         if: always()
         run: |
-          echo "=== PWD actual ==="
-          pwd
+          echo "PWD: $(pwd)"
           echo ""
-          echo "=== Contenido actual ==="
-          ls -la
-          echo ""
-          echo "=== Contenido de migration-repo/migrated ==="
-          ls -laR migration-repo/migrated 2>/dev/null | head -50 || echo "No existe"
-
-      - name: Copiar artifacts al workspace raíz
-        if: always()
-        shell: bash
-        run: |
-          echo "Copiando archivos..."
-          mkdir -p "${{ runner.workspace }}/artifacts"
-          cp -rv migration-repo/migrated/* "${{ runner.workspace }}/artifacts/" 2>/dev/null || true
-          echo ""
-          echo "Verificando copia:"
-          ls -la "${{ runner.workspace }}/artifacts/"
+          echo "Contenido de artifacts:"
+          ls -la artifacts || echo "No existe artifacts"
           echo ""
           echo "Total archivos:"
-          find "${{ runner.workspace }}/artifacts" -type f 2>/dev/null | wc -l
+          find artifacts -type f 2>/dev/null | wc -l
 
       - name: Preparar nombre de artifact
         id: artifact-name
@@ -172,24 +131,10 @@ jobs:
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
 
-      - name: Listar archivos finales
-        if: always()
-        run: |
-          echo "=== Archivos a subir ==="
-          find migration-repo/migrated -type f
-          echo ""
-          echo "Total: $(find migration-repo/migrated -type f | wc -l)"
-
-      - name: Verificar artifacts
-        run: |
-          echo "Contenido en artifacts:"
-          find artifacts -type f || echo "No hay archivos"
-
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: richie-migrated
-          path: migration-repo/migrated/**
+          name: ${{ steps.artifact-name.outputs.name }}
+          path: artifacts/**
           retention-days: 7
-

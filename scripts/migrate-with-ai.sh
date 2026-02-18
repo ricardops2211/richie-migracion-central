@@ -290,13 +290,16 @@ echo "Éxitos: $processed"
 echo "Fallos: $failed"
 echo ""
 
-if [ -d "migrated" ]; then
-  total_files=$(find migrated -type f 2>/dev/null | wc -l)
-  echo "$total_files archivos generados:"
-  find migrated -type f | head -30 | sed 's/^/  /'
-  [ $(find migrated -type f | wc -l) -gt 30 ] && echo "  ... y más"
+ARTIFACT_ROOT="../artifacts"
+
+if [ -d "$ARTIFACT_ROOT" ]; then
+  total_files=$(find "$ARTIFACT_ROOT" -type f 2>/dev/null | wc -l)
+  echo "$total_files archivos generados en artifacts:"
+  find "$ARTIFACT_ROOT" -type f | head -30 | sed 's/^/  /'
+  [ "$total_files" -gt 30 ] && echo "  ... y más"
 else
-  echo "⚠ No hay archivos migrados"
+  echo "⚠ No existe carpeta artifacts"
 fi
+
 
 exit 0
