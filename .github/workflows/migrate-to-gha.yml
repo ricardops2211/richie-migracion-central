@@ -128,21 +128,23 @@ jobs:
           find artifacts -type f | wc -l
           find artifacts -type f | head -10
 
-      - name: Mover artifacts al root
-        if: always()
+      - name: Debug real path
         run: |
-          mkdir -p final-artifacts
-          cp -r migration-repo/artifacts/* final-artifacts/ || true
+          echo "PWD:"
+          pwd
+          echo "Workspace:"
+          echo $GITHUB_WORKSPACE
+          echo "Listando artifacts:"
+          ls -R artifacts || true
 
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: artifacts/**
+          path: artifacts
           if-no-files-found: warn
           retention-days: 7
-
 
 
 
