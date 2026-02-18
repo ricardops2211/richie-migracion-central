@@ -1,23 +1,16 @@
 [
   {
     "repo": "ricardops2211/richie-jenkins-shared-lib",
-    "branch": "master",
+    "branches": ["main"],
     "shared_lib_path": "vars/",
     "jenkins_path": "Jenkinsfile-example",
     "type": "jenkins"
   },
   {
-    "repo": "boozallen/sdp-libraries",
-    "branch": "main",
-    "shared_lib_path": "vars/",
-    "jenkins_path": "Jenkinsfile",
-    "type": "jenkins"
-  },
-  {
     "repo": "ricardops2211/richie-azure-devops-templates",
-    "branch": "master",
+    "branch": "main",
     "shared_lib_path": "templates/",
-    "jenkins_path": "Jenkinsfile",
+    "jenkins_path": "azure-pipelines.yml",
     "type": "azure"
   }
 ]

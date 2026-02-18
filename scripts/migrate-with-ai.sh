@@ -1,112 +1,114 @@
-#!/bin/bash
+name: Migración Automatizada a GitHub Actions (con IA)
 
-set -e
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'repos-config.json'
+      - '.github/workflows/migrate-to-gha.yaml'
+      - 'scripts/migrate-with-ai.sh'
 
-OPENAI_API_KEY=${OPENAI_API_KEY}
-OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1}
+  workflow_dispatch:
 
-if [ -z "$OPENAI_API_KEY" ]; then
-  echo "❌ OPENAI_API_KEY no definido"
-  exit 1
-fi
+permissions:
+  contents: read
 
-if [ ! -f "repos.json" ]; then
-  echo "❌ repos.json no encontrado en la raíz del repo"
-  exit 1
-fi
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix || '[]' }}
+    steps:
+      - name: Checkout repositorio de migración
+        uses: actions/checkout@v4
 
-rm -rf workspace migrated
-mkdir -p workspace migrated
+      - name: Verificar y mostrar repos-config.json
+        run: |
+          if [ -f repos-config.json ]; then
+            echo "✅ repos-config.json encontrado"
+            echo "Contenido:"
+            cat repos-config.json
+            echo ""
+            echo "Validando JSON..."
+            jq . repos-config.json > /dev/null && echo "JSON válido" || echo "ERROR: JSON inválido"
+          else
+            echo "❌ ERROR: repos-config.json NO existe en la raíz"
+            ls -la
+            exit 1
+          fi
 
-echo "🚀 Iniciando migración múltiple"
+      - name: Generar matrix dinámica
+        id: build
+        run: |
+          MATRIX=$(jq -r '
+            .[] 
+            | (.branches // [.branch // "main"]) as $b
+            | $b[]
+            | {
+                repo: .repo,
+                branch: .,
+                shared_lib_path: (.shared_lib_path // "vars/"),
+                jenkins_path: (.jenkins_path // "Jenkinsfile"),
+                type: (.type // "jenkins")
+              }
+            | @json
+          ' repos-config.json | jq -s -c 'map(.)' || echo "[]")
 
-repo_count=$(jq length repos.json)
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
-for ((i=0; i<repo_count; i++)); do
+          echo "Matrix generada:"
+          echo "$MATRIX" | jq . || echo "Matrix vacía o inválida"
 
-  repo=$(jq -r ".[$i].repo" repos.json)
-  branch=$(jq -r ".[$i].branch" repos.json)
-  shared_lib_path=$(jq -r ".[$i].shared_lib_path" repos.json)
-  jenkins_path=$(jq -r ".[$i].jenkins_path" repos.json)
-  type=$(jq -r ".[$i].type" repos.json)
+  migrate:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    if: ${{ fromJson(needs.generate-matrix.outputs.matrix) != '[]' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    steps:
+      - name: Checkout repositorio origen (${{ matrix.config.repo }} @ ${{ matrix.config.branch }})
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.config.repo }}
+          ref: ${{ matrix.config.branch }}
+          path: source-repo
+          token: ${{ secrets.GH_PAT }}
 
-  echo "------------------------------------------"
-  echo "🔄 Procesando $repo ($type)"
+      - name: Buscar archivos relevantes
+        id: find-files
+        run: |
+          cd source-repo
+          FILES=$(find . -type f \
+            \( -name "*.groovy" \
+            -o -name "Jenkinsfile*" \
+            -o -name "*.yml" \
+            -o -name "*.yaml" \) \
+            -path "*${{ matrix.config.shared_lib_path }}*" \
+            -o -path "*${{ matrix.config.jenkins_path }}*" \
+            | tr '\n' ' ')
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+          echo "Archivos encontrados: $FILES"
 
-  git clone --depth 1 --branch "$branch" "https://github.com/$repo.git" "workspace/$repo"
+      - name: Ejecutar migración con IA (script separado)
+        if: steps.find-files.outputs.files != ''
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-4o' }}
+          REPO_NAME: ${{ matrix.config.repo }}
+          BRANCH_NAME: ${{ matrix.config.branch }}
+          FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
+          TYPE: ${{ matrix.config.type }}
+        run: ./scripts/migrate-with-ai.sh
 
-  cd "workspace/$repo"
-
-  if [ ! -d "$shared_lib_path" ]; then
-    echo "⚠️ Carpeta $shared_lib_path no encontrada"
-    cd ../../
-    continue
-  fi
-
-  FILES=$(find "$shared_lib_path" -type f)
-
-  for file in $FILES; do
-    echo "📄 Migrando $file"
-
-    content=$(cat "$file")
-
-    if [ "$type" == "azure" ]; then
-      prompt="Eres experto DevOps.
-Migra este Azure DevOps template a Jenkins Declarative Pipeline.
-Devuelve solo el Jenkinsfile.
-
-$content"
-    else
-      prompt="Eres experto en Jenkins Shared Libraries.
-Convierte esta shared library en un Jenkinsfile declarative que la use.
-Devuelve solo el Jenkinsfile.
-
-$content"
-    fi
-
-    response=$(jq -n \
-      --arg model "$OPENAI_MODEL" \
-      --arg prompt "$prompt" \
-      '{
-        model: $model,
-        messages: [
-          { role: "user", content: $prompt }
-        ],
-        temperature: 0.1,
-        max_tokens: 4000
-      }' | curl -s https://api.openai.com/v1/chat/completions \
-          -H "Content-Type: application/json" \
-          -H "Authorization: Bearer '"$OPENAI_API_KEY"'" \
-          -d @-)
-
-    api_error=$(echo "$response" | jq -r '.error.message // empty')
-
-    if [ -n "$api_error" ]; then
-      echo "❌ Error OpenAI: $api_error"
-      continue
-    fi
-
-    generated=$(echo "$response" | jq -r '.choices[0].message.content // empty')
-
-    if [ -z "$generated" ]; then
-      echo "❌ Respuesta vacía"
-      continue
-    fi
-
-    cd ../../
-    output_dir="migrated/$repo"
-    mkdir -p "$output_dir"
-
-    echo "$generated" > "$output_dir/$jenkins_path"
-
-    echo "✅ Guardado en $output_dir/$jenkins_path"
-
-    cd "workspace/$repo"
-
-  done
-
-  cd ../../
-
-done
-
-echo "🎉 Migración completa"
+      - name: Subir resultados como Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migrated-${{ matrix.config.repo }}-${{ matrix.config.branch }}
+          path: migrated/**
+          if-no-files-found: warn
+          retention-days: 7
