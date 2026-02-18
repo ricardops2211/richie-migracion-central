@@ -119,16 +119,20 @@ jobs:
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
 
+      - name: Mover artifacts para upload seguro
+        if: always()
+        run: |
+          mkdir -p /home/runner/artifacts-temp
+          cp -r ${{ github.workspace }}/migration-repo/artifacts/* /home/runner/artifacts-temp/ || true
+
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: ${{ github.workspace }}/migration-repo/artifacts
+          path: /home/runner/artifacts-temp
           if-no-files-found: warn
           retention-days: 7
-
-
 
 
 
