@@ -139,9 +139,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: final-artifacts/**
+          path: artifacts/**
           if-no-files-found: warn
           retention-days: 7
+
 
 
 
