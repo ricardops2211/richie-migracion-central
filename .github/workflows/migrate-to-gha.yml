@@ -1,4 +1,4 @@
-name: Migración Automatizada a GitHub Actions 
+name: Migración Automatizada a GitHub Actions (con Groq)
 
 on:
   push:
@@ -11,71 +11,31 @@ permissions:
   contents: read
 
 jobs:
-  debug-and-matrix:
+  migrate-all:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.build.outputs.matrix || '[]' }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verificar y validar JSON
+      - name: Verificar JSON
         run: |
           if [ -f repos-config.json ]; then
-            echo "✅ JSON encontrado en raíz"
-            echo "Contenido crudo:"
-            cat -v repos-config.json   # -v muestra caracteres invisibles
-            echo ""
-            echo "Intentando validar con jq..."
-            jq . repos-config.json > /dev/null 2>&1
-            if [ $? -eq 0 ]; then
-              echo "JSON válido - sintaxis OK"
-            else
-              echo "ERROR: jq no pudo parsear el JSON (sintaxis inválida)"
-              jq . repos-config.json   # muestra el error exacto
-              exit 1
-            fi
+            echo "JSON encontrado"
+            cat repos-config.json
           else
-            echo "❌ repos-config.json NO existe en la raíz"
-            ls -la
+            echo "ERROR: repos-config.json no existe"
             exit 1
           fi
 
-      - name: Generar matrix
-        id: build
-        run: |
-          MATRIX=$(jq -r '
-            .[] 
-            | (.branches // [.branch // "master"]) as $b
-            | $b[]
-            | {
-                repo: .repo,
-                branch: .,
-                shared_lib_path: (.shared_lib_path // "vars/"),
-                jenkins_path: (.jenkins_path // "Jenkinsfile"),
-                type: (.type // "jenkins")
-              }
-            | @json
-          ' repos-config.json 2>&1)
+      - name: Ejecutar migración con Groq
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: llama-3.1-70b-versatile
+        run: ./scripts/migrate-with-ai.sh
 
-          echo "Salida cruda de jq:"
-          echo "$MATRIX"
-
-          MATRIX_CLEAN=$(echo "$MATRIX" | jq -s -c 'map(.)' 2>&1 || echo "[]")
-
-          echo "matrix=$MATRIX_CLEAN" >> $GITHUB_OUTPUT
-
-          echo "Matrix final (longitud: $(echo "$MATRIX_CLEAN" | jq length || echo 0)):"
-          echo "$MATRIX_CLEAN" | jq . || echo "No se pudo mostrar"
-
-  migrate:
-    needs: debug-and-matrix
-    runs-on: ubuntu-latest
-    if: ${{ fromJson(needs.debug-and-matrix.outputs.matrix) != '[]' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 5
-      matrix:
-        config: ${{ fromJson(needs.debug-and-matrix.outputs.matrix) }}
-    steps:
-      # Tus pasos reales aquí (checkout, find-files, script, artifacts)
-      - run: echo "Job ejecutado - agrega tus pasos"
+      - name: Subir resultados como Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migrated-files
+          path: migrated/**
+          retention-days: 7
