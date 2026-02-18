@@ -1,4 +1,4 @@
-name: Migración Automatizadas a GitHub Actions
+name: Migración Automatizada a GitHub Actions (con Groq)
 
 on:
   push:
@@ -85,44 +85,64 @@ jobs:
           path: source-repo
           token: ${{ secrets.GH_PAT }}
 
-      - name: Buscar archivos (DEBUG)
+      - name: Buscar archivos
         id: find-files
+        shell: bash
         run: |
+          echo "=== DEBUG: Estructura de directorios ==="
           echo "PWD: $(pwd)"
-          echo "Contents of :"
-          ls -la
           echo ""
-          echo "=== source-repo contents ==="
-          ls -la source-repo/ || echo "source-repo no existe"
+          echo "=== source-repo ==="
+          ls -la source-repo/ || echo "No existe"
           echo ""
           echo "=== Buscando archivos ==="
-          FILES=$(find source-repo -type f \( -name "*.groovy" -o -name "Jenkinsfile*" \) -printf '%P\n' 2>/dev/null | sort)
+          
+          # Buscar todos los archivos relevantes
+          FILES=$(find source-repo -type f \
+            \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
+            -not -path "*/.git/*" \
+            -printf '%P\n' 2>/dev/null | sort)
           
           echo "Archivos encontrados:"
           echo "$FILES"
           echo ""
-          echo "files<<EOF" >> $GITHUB_OUTPUT
+          
+          # Guardar en output usando delimitador EOF
+          echo "files<<HEREDOC" >> $GITHUB_OUTPUT
           echo "$FILES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "HEREDOC" >> $GITHUB_OUTPUT
+          
+          echo "Output guardado correctamente"
+
+      - name: Debug output
+        run: |
+          echo "FILES_OUTPUT:"
+          echo "${{ steps.find-files.outputs.files }}"
+          echo "---"
+          echo "${{ steps.find-files.outputs.files }}" | wc -l
 
       - name: Transformar con Groq
         if: steps.find-files.outputs.files != ''
         working-directory: migration-repo
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: llama-3.1-8b-instant
+          GROQ_MODEL: llama-3.3-70b-versatile
           REPO_NAME: ${{ matrix.config.repo }}
           BRANCH_NAME: ${{ matrix.config.branch }}
           FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
           TYPE: ${{ matrix.config.type }}
         run: |
+          echo "=== DEBUG FILES_TO_MIGRATE ==="
+          echo "$FILES_TO_MIGRATE"
+          echo "=== FIN DEBUG ==="
+          echo ""
           chmod +x ./scripts/migrate-with-ai.sh
           ./scripts/migrate-with-ai.sh
 
       - name: Preparar nombre de artifact
         id: artifact-name
+        if: always()
         run: |
-          # Convertir / a - usando sed
           SAFE_NAME=$(echo "${{ matrix.config.repo }}" | sed 's/\//-/g')
           echo "name=migrated-${SAFE_NAME}-${{ matrix.config.branch }}" >> $GITHUB_OUTPUT
 
