@@ -1,4 +1,4 @@
-name: Migración Automatizada a GitHub Actions (con Groq - DEBUG FINAL)
+name: Migración Automatizada a GitHub Actions 
 
 on:
   push:
@@ -16,55 +16,39 @@ jobs:
     outputs:
       matrix: ${{ steps.build.outputs.matrix || '[]' }}
     steps:
-      - name: Checkout repositorio de migración
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Mostrar todo el entorno (depuración máxima)
+      - name: Verificar y validar JSON
         run: |
-          echo "Directorio actual:"
-          pwd
-          echo ""
-          echo "Archivos en la raíz del repositorio:"
-          ls -la
-          echo ""
-          echo "Archivos JSON en todo el repositorio:"
-          find . -type f -name "*json" -o -name "*config*" -o -name "*repos*" 2>/dev/null || echo "No se encontró ningún JSON"
-          echo ""
-          echo "Rama actual:"
-          git branch --show-current
-          echo ""
-          echo "Último commit:"
-          git log -1 --oneline
-          echo ""
-          echo "Contenido de repos-config.json si existe en raíz:"
           if [ -f repos-config.json ]; then
-            echo "✅ ENCONTRADO"
-            cat repos-config.json
+            echo "✅ JSON encontrado en raíz"
+            echo "Contenido crudo:"
+            cat -v repos-config.json   # -v muestra caracteres invisibles
             echo ""
-            echo "Validando JSON con jq:"
-            jq . repos-config.json > /dev/null 2>&1 && echo "JSON válido" || echo "JSON inválido (revisa comas/llaves)"
+            echo "Intentando validar con jq..."
+            jq . repos-config.json > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+              echo "JSON válido - sintaxis OK"
+            else
+              echo "ERROR: jq no pudo parsear el JSON (sintaxis inválida)"
+              jq . repos-config.json   # muestra el error exacto
+              exit 1
+            fi
           else
-            echo "❌ NO EXISTE repos-config.json en la raíz"
-            echo "Posibles nombres alternativos que sí existen:"
-            ls -la | grep -i json || echo "Ninguno"
+            echo "❌ repos-config.json NO existe en la raíz"
+            ls -la
+            exit 1
           fi
 
-      - name: Generar matrix (con todos los safeguards)
+      - name: Generar matrix
         id: build
         run: |
-          if [ ! -f repos-config.json ]; then
-            echo "ERROR: repos-config.json no encontrado. Matrix = []"
-            echo "matrix=[]" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "JSON encontrado. Parseando..."
-          RAW=$(jq -r '
+          MATRIX=$(jq -r '
             .[] 
             | (.branches // [.branch // "master"]) as $b
             | $b[]
             | {
-                repo: .repo // "MISSING_REPO",
+                repo: .repo,
                 branch: .,
                 shared_lib_path: (.shared_lib_path // "vars/"),
                 jenkins_path: (.jenkins_path // "Jenkinsfile"),
@@ -73,24 +57,15 @@ jobs:
             | @json
           ' repos-config.json 2>&1)
 
-          echo "Salida cruda de jq (incluye errores si hay):"
-          echo "$RAW"
+          echo "Salida cruda de jq:"
+          echo "$MATRIX"
 
-          MATRIX=$(echo "$RAW" | jq -s -c 'map(select(.repo != "MISSING_REPO"))' 2>&1 || echo "[]")
+          MATRIX_CLEAN=$(echo "$MATRIX" | jq -s -c 'map(.)' 2>&1 || echo "[]")
 
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "matrix=$MATRIX_CLEAN" >> $GITHUB_OUTPUT
 
-          echo "Matrix final:"
-          echo "$MATRIX" | jq . || echo "Matrix inválida o vacía"
-
-          if [ "$MATRIX" = "[]" ]; then
-            echo "MATRIX VACÍA - Causas probables:"
-            echo "1. JSON vacío o sin objetos válidos"
-            echo "2. Sin campo 'repo' o 'branch'/'branches'"
-            echo "3. Error de sintaxis JSON (coma extra, llave mal cerrada)"
-          else
-            echo "ÉXITO - Matrix tiene $(echo "$MATRIX" | jq length) entradas"
-          fi
+          echo "Matrix final (longitud: $(echo "$MATRIX_CLEAN" | jq length || echo 0)):"
+          echo "$MATRIX_CLEAN" | jq . || echo "No se pudo mostrar"
 
   migrate:
     needs: debug-and-matrix
@@ -102,6 +77,5 @@ jobs:
       matrix:
         config: ${{ fromJson(needs.debug-and-matrix.outputs.matrix) }}
     steps:
-
-      # Aquí puedes poner tus pasos reales (checkout, find-files, script Groq, artifacts)
-      - run: echo "Job migración ejecutado - agrega tus pasos aquí"
+      # Tus pasos reales aquí (checkout, find-files, script, artifacts)
+      - run: echo "Job ejecutado - agrega tus pasos"
