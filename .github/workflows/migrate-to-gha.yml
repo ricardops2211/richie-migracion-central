@@ -110,7 +110,7 @@ jobs:
         working-directory: migration-repo
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: deepseek-coder-v2-lite
+          GROQ_MODEL: mixtral-8x7b-32768
           REPO_NAME: ${{ matrix.config.repo }}
           BRANCH_NAME: ${{ matrix.config.branch }}
           FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
