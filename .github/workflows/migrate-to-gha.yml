@@ -190,6 +190,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: richie-migrated
-          path: artifacts/**
+          path: migration-repo/migrated/**
           retention-days: 7
 

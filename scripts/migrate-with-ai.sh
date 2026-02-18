@@ -29,7 +29,8 @@ if [ -z "$FILES_TO_MIGRATE" ]; then
 fi
 
 SOURCE_REPO_PATH="../source-repo"
-OUTPUT_BASE="migrated/${REPO_NAME}/${BRANCH_NAME}"
+OUTPUT_BASE="../artifacts/${REPO_NAME}/${BRANCH_NAME}"
+
 mkdir -p "$OUTPUT_BASE" || { echo "ERROR: No se pudo crear $OUTPUT_BASE"; exit 1; }
 
 echo "DEBUG: Verificando rutas:"
