@@ -180,10 +180,16 @@ jobs:
           echo ""
           echo "Total: $(find migration-repo/migrated -type f | wc -l)"
 
+      - name: Verificar artifacts
+        run: |
+          echo "Contenido en artifacts:"
+          find artifacts -type f || echo "No hay archivos"
+
       - name: Subir Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: migrated-files
-          path: migration-repo/migrated
+          name: richie-migrated
+          path: artifacts/**
           retention-days: 7
+
