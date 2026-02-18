@@ -142,14 +142,30 @@ jobs:
       - name: Debug - Listar archivos antes de upload
         if: always()
         run: |
-          echo "=== Contenido de migration-repo/migrated ==="
-          ls -la migration-repo/migrated/ 2>/dev/null || echo "No existe"
+          echo "=== PWD actual ==="
+          pwd
           echo ""
-          echo "=== Buscando archivos recursivamente ==="
-          find migration-repo/migrated -type f 2>/dev/null | head -20
+          echo "=== Contenido actual ==="
+          ls -la
+          echo ""
+          echo "=== Contenido de migration-repo/migrated ==="
+          ls -laR migration-repo/migrated 2>/dev/null | head -50 || echo "No existe"
           echo ""
           echo "=== Total de archivos ==="
           find migration-repo/migrated -type f 2>/dev/null | wc -l
+
+      - name: Copiar artifacts al workspace raíz
+        if: always()
+        run: |
+          echo "Copiando archivos..."
+          mkdir -p artifacts
+          cp -r migration-repo/migrated/* artifacts/ 2>/dev/null || true
+          echo ""
+          echo "Contenido de artifacts:"
+          find artifacts -type f | head -20
+          echo ""
+          echo "Total archivos copiados:"
+          find artifacts -type f 2>/dev/null | wc -l
 
       - name: Preparar nombre de artifact
         id: artifact-name
@@ -163,5 +179,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.artifact-name.outputs.name }}
-          path: migration-repo/migrated/
+          path: artifacts/
           retention-days: 7
