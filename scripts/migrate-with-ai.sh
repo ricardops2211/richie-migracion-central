@@ -65,11 +65,11 @@ while IFS= read -r file || [ -n "$file" ]; do
     continue
   fi
   
-  echo "  ✓ Archivo encontrado"
+  echo "Archivo encontrado"
   
   # Leer contenido del archivo
   content=$(cat "$full_path" 2>&1) || {
-    echo "  ❌ ERROR: No se pudo leer el archivo"
+    echo "ERROR: No se pudo leer el archivo"
     ((failed++))
     continue
   }
@@ -145,7 +145,7 @@ $content"
         \"temperature\": 0.2,
         \"max_tokens\": 15000
       }" 2>&1) || {
-        echo "    ❌ Error en curl"
+        echo "Error en curl"
         ((retry++))
         [ $retry -lt $max_retries ] && sleep $((RATE_LIMIT_DELAY + retry))
         continue
@@ -159,7 +159,7 @@ $content"
     
     if [ "$http_code" = "200" ]; then
       generated=$(echo "$body" | jq -r '.choices[0].message.content // empty' 2>/dev/null) || {
-        echo "    ❌ Error parseando JSON"
+        echo "Error parseando JSON"
         ((retry++))
         [ $retry -lt $max_retries ] && sleep $((RATE_LIMIT_DELAY + retry))
         continue
@@ -167,7 +167,7 @@ $content"
       
       if [ -n "$generated" ]; then
         success=true
-        echo "    ✓ Respuesta recibida ($(echo "$generated" | wc -c) caracteres)"
+        echo "Respuesta recibida ($(echo "$generated" | wc -c) caracteres)"
         break
       fi
     else
@@ -177,11 +177,11 @@ $content"
         ((retry++))
         if [ $retry -lt $max_retries ]; then
           wait_time=$((RATE_LIMIT_DELAY + retry * 2))
-          echo "    ⏳ Rate limit. Esperando ${wait_time}s..."
+          echo "Rate limit. Esperando ${wait_time}s..."
           sleep "$wait_time"
         fi
       else
-        echo "    ❌ Error Groq: $error_msg"
+        echo "Error Groq: $error_msg"
         ((failed++))
         success=false
         break
@@ -193,7 +193,7 @@ $content"
     safe_name=$(basename "$file" | sed 's/\.[^.]*$//' | sed 's/[^a-zA-Z0-9._-]/_/g')
     output_dir="$OUTPUT_BASE/$safe_name"
     mkdir -p "$output_dir" || {
-      echo "  ❌ No se pudo crear directorio: $output_dir"
+      echo "No se pudo crear directorio: $output_dir"
       ((failed++))
       continue
     }
@@ -257,7 +257,7 @@ $content"
       target_path="$output_dir/$current_file"
       target_dir=$(dirname "$target_path")
       mkdir -p "$target_dir" || {
-        echo "  ⚠ No se pudo crear $target_dir"
+        echo "No se pudo crear $target_dir"
       }
       echo "$content" > "$target_path"
       echo "    ✓ $current_file"
@@ -267,10 +267,10 @@ $content"
     rm -f "$temp_file"
     
     if [ $file_count_local -gt 0 ]; then
-      echo "  ✓ Completado ($file_count_local archivo(s))"
+      echo "Completado ($file_count_local archivo(s))"
       ((processed++))
     else
-      echo "  ⚠ No se generaron archivos"
+      echo "No se generaron archivos"
       ((failed++))
     fi
     
@@ -278,7 +278,7 @@ $content"
       sleep "$RATE_LIMIT_DELAY"
     fi
   else
-    echo "  ❌ No se pudo procesar"
+    echo "No se pudo procesar"
     ((failed++))
   fi
   
@@ -300,7 +300,7 @@ if [ -d "$ARTIFACT_ROOT" ]; then
   echo "$total_files archivos generados:"
   find "$ARTIFACT_ROOT" -type f | head -30 | sed 's/^/  /'
 else
-  echo "⚠ No hay archivos generados"
+  echo "No hay archivos generados"
 fi
 
 
