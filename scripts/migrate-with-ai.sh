@@ -60,7 +60,7 @@ while IFS= read -r file || [ -n "$file" ]; do
   
   # Verificar que el archivo existe
   if [ ! -f "$full_path" ]; then
-    echo "  ⚠ ERROR: Archivo no encontrado: $full_path"
+    echo "ERROR: Archivo no encontrado: $full_path"
     ((failed++))
     continue
   fi
@@ -218,7 +218,7 @@ $content"
           target_path="$output_dir/$current_file"
           target_dir=$(dirname "$target_path")
           mkdir -p "$target_dir" || {
-            echo "  ⚠ No se pudo crear $target_dir"
+            echo "No se pudo crear $target_dir"
             continue
           }
           echo "$content" > "$target_path"
@@ -233,7 +233,7 @@ $content"
           target_path="$output_dir/$current_file"
           target_dir=$(dirname "$target_path")
           mkdir -p "$target_dir" || {
-            echo "  ⚠ No se pudo crear $target_dir"
+            echo "No se pudo crear $target_dir"
             continue
           }
           echo "$content" > "$target_path"
