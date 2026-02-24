@@ -110,8 +110,8 @@ jobs:
           FILES_TO_MIGRATE: ${{ steps.find-files.outputs.files }}
           TYPE: ${{ matrix.config.type }}
         run: |
-          chmod +x ./scripts/migrate-with-ai.sh
-          ./scripts/migrate-with-ai.sh
+          chmod +x ./scripts/migrate-prompt.sh
+          ./scripts/migrate-prompt.sh
 
       - name: Preparar nombre de artifact
         id: artifact-name
