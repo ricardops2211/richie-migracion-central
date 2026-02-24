@@ -20,6 +20,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] REPO_NAME: $REPO_NAME"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] BRANCH_NAME: $BRANCH_NAME"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] TYPE: $TYPE"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] PWD: $(pwd)"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] FILES_TO_MIGRATE (crudo): $FILES_TO_MIGRATE"  # Nuevo: Debug de la lista
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] ==================="
 
 # Nuevo: Verificar dependencias
@@ -36,11 +37,6 @@ if [ -z "$GROQ_API_KEY" ]; then
   exit 1
 fi
 
-if [ -z "$FILES_TO_MIGRATE" ]; then
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] No hay archivos para migrar"
-  exit 0
-fi
-
 SOURCE_REPO_PATH="../source-repo"
 OUTPUT_BASE="artifacts/${REPO_NAME}/${BRANCH_NAME}"
 
@@ -55,35 +51,45 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')]   SOURCE_REPO_PATH existe: $([ -d "$SOURCE_
 echo "[$(date '+%Y-%m-%d %H:%M:%S')]   OUTPUT_BASE: $OUTPUT_BASE"
 echo ""
 
-file_count=0
+# Nuevo: Auto-detección si $FILES_TO_MIGRATE está vacío
+if [ -z "$FILES_TO_MIGRATE" ]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ADVERTENCIA: FILES_TO_MIGRATE vacío. Auto-detectando archivos en $SOURCE_REPO_PATH..."
+  FILES_TO_MIGRATE=$(find "$SOURCE_REPO_PATH" -type f \( -name "Jenkinsfile*" -o -name "*.groovy" \) -print0 | xargs -0 -I {} basename {} | tr '\n' '\n')  # Busca Jenkinsfiles y .groovy
+  if [ -z "$FILES_TO_MIGRATE" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: No se encontraron archivos para migrar en $SOURCE_REPO_PATH (verifica repo clonado)."
+    exit 0
+  fi
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] Archivos auto-detectados:"
+  echo "$FILES_TO_MIGRATE"
+fi
+
+file_count=$(echo "$FILES_TO_MIGRATE" | wc -l)  # Nuevo: Cuenta real de archivos
 processed=0
 failed=0
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Iniciando procesamiento de archivos..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Iniciando procesamiento de $file_count archivos..."
 echo ""
 
 while IFS= read -r file || [ -n "$file" ]; do
   [ -z "$file" ] && continue
   
-  ((file_count++))
-  file=$(echo "$file" | xargs | sed 's/[^a-zA-Z0-9./-]/_/g')  # Nuevo: Sanitización de file para seguridad
+  ((file_count_total=$processed + failed + 1))  # Nuevo: Contador dinámico
+  file=$(echo "$file" | xargs | sed 's/[^a-zA-Z0-9./-]/_/g')  # Sanitización
   
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] → [$(printf "%2d" $((processed + failed + 1)))/$file_count] Procesando: $file"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] → [$file_count_total/$file_count] Procesando: $file"
   
   full_path="$SOURCE_REPO_PATH/$file"
   
-  # Verificar que el archivo existe
   if [ ! -f "$full_path" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')]  ERROR: Archivo no encontrado: $full_path"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')]   ⚠ ERROR: Archivo no encontrado: $full_path (verifica clone del repo)"
     ((failed++))
-    continue
+    continue  # Continúa con el siguiente en lugar de fail total
   fi
   
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')]  Archivo encontrado"
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')]   ✓ Archivo encontrado"
   
-  # Leer contenido del archivo
   content=$(cat "$full_path" 2>&1) || {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')]  ERROR: No se pudo leer el archivo"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')]   ❌ ERROR: No se pudo leer $full_path (verifica permisos)"
     ((failed++))
     continue
   }
