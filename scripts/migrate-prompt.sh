@@ -36,7 +36,7 @@ if [ -z "$GROQ_API_KEY" ]; then
   exit 1
 fi
 
-SOURCE_REPO_PATH="../source-repo"
+SOURCE_REPO_PATH="$GITHUB_WORKSPACE/source-repo"
 OUTPUT_BASE="artifacts/${REPO_NAME}/${BRANCH_NAME}"
 
 mkdir -p "$OUTPUT_BASE" || {
