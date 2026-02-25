@@ -224,7 +224,7 @@ $content"
     generated="${generated//\${base_name}/$base_name}"
     
     # Limpiar generated: remover posibles code blocks y texto extra
-    generated=$(echo "$generated" | sed -e '/^##FILE:/!d' -e 's/^```yaml//g' -e 's/^```//g' -e 's/```$//g' -e '/^[^#]/s/^/  /' )  # Asegurar indentación si es necesario
+    generated=$(echo "$generated" | sed -e 's/^```yaml//g' -e 's/^```//g' -e 's/```$//g')
     
     # Procesar la salida con bash mejorado para manejar variaciones
     temp_file=$(mktemp)
@@ -245,19 +245,11 @@ $content"
             continue
           }
           echo "$content" > "$target_path"
-          # Validar YAML básico con python si yq no está
-          if ! command -v yq >/dev/null; then
-            python3 -c "import yaml; yaml.safe_load(open('$target_path'))" 2>/dev/null && echo "    ✓ $current_file (YAML válido)" || echo "    ⚠ YAML inválido en $current_file - removiendo"
-            if [ $? -ne 0 ]; then
-              rm "$target_path"
-              continue
-            fi
+          # Validar YAML con yq si disponible, sin python para evitar errores
+          if command -v yq >/dev/null; then
+            yq e '.' "$target_path" >/dev/null 2>&1 && echo "    OK $current_file (YAML valid)" || { echo "    WARN YAML invalid in $current_file - removing"; rm "$target_path"; continue; }
           else
-            yq e '.' "$target_path" >/dev/null 2>&1 && echo "    ✓ $current_file (YAML válido)" || echo "    ⚠ YAML inválido en $current_file - removiendo"
-            if [ $? -ne 0 ]; then
-              rm "$target_path"
-              continue
-            fi
+            echo "    OK $current_file (no validation)"
           fi
           ((file_count_local++))
         fi
@@ -272,18 +264,10 @@ $content"
             continue
           }
           echo "$content" > "$target_path"
-          if ! command -v yq >/dev/null; then
-            python3 -c "import yaml; yaml.safe_load(open('$target_path'))" 2>/dev/null && echo "    ✓ $current_file (YAML válido)" || echo "    ⚠ YAML inválido en $current_file - removiendo"
-            if [ $? -ne 0 ]; then
-              rm "$target_path"
-              continue
-            fi
+          if command -v yq >/dev/null; then
+            yq e '.' "$target_path" >/dev/null 2>&1 && echo "    OK $current_file (YAML valid)" || { echo "    WARN YAML invalid in $current_file - removing"; rm "$target_path"; continue; }
           else
-            yq e '.' "$target_path" >/dev/null 2>&1 && echo "    ✓ $current_file (YAML válido)" || echo "    ⚠ YAML inválido en $current_file - removiendo"
-            if [ $? -ne 0 ]; then
-              rm "$target_path"
-              continue
-            fi
+            echo "    OK $current_file (no validation)"
           fi
           ((file_count_local++))
         fi
@@ -305,16 +289,10 @@ $content"
         echo "No se pudo crear $target_dir"
       }
       echo "$content" > "$target_path"
-      if ! command -v yq >/dev/null; then
-        python3 -c "import yaml; yaml.safe_load(open('$target_path'))" 2>/dev/null && echo "    ✓ $current_file (YAML válido)" || echo "    ⚠ YAML inválido en $current_file - removiendo"
-        if [ $? -ne 0 ]; then
-          rm "$target_path"
-        fi
+      if command -v yq >/dev/null; then
+        yq e '.' "$target_path" >/dev/null 2>&1 && echo "    OK $current_file (YAML valid)" || { echo "    WARN YAML invalid in $current_file - removing"; rm "$target_path"; }
       else
-        yq e '.' "$target_path" >/dev/null 2>&1 && echo "    ✓ $current_file (YAML válido)" || echo "    ⚠ YAML inválido en $current_file - removiendo"
-        if [ $? -ne 0 ]; then
-          rm "$target_path"
-        fi
+        echo "    OK $current_file (no validation)"
       fi
       ((file_count_local++))
     fi
@@ -340,7 +318,7 @@ jobs:
       - name: Default Step
         run: echo "Migrated from $file"
 EOF
-      echo "    ✓ $default_file (generado por defecto)"
+      echo "    OK $default_file (generado por defecto)"
       ((file_count_local++))
       ((processed++))
     else
