@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 set -uo pipefail
 
@@ -247,7 +248,13 @@ $content"
           echo "$content" > "$target_path"
           # Validar YAML con yq si disponible, sin python para evitar errores
           if command -v yq >/dev/null; then
-            yq e '.' "$target_path" >/dev/null 2>&1 && echo "    OK $current_file (YAML valid)" || { echo "    WARN YAML invalid in $current_file - removing"; rm "$target_path"; continue; }
+            if yq e '.' "$target_path" >/dev/null 2>&1; then
+              echo "    OK $current_file (YAML valid)"
+            else
+              echo "    WARN YAML invalid in $current_file - removing"
+              rm "$target_path"
+              continue
+            fi
           else
             echo "    OK $current_file (no validation)"
           fi
@@ -265,7 +272,13 @@ $content"
           }
           echo "$content" > "$target_path"
           if command -v yq >/dev/null; then
-            yq e '.' "$target_path" >/dev/null 2>&1 && echo "    OK $current_file (YAML valid)" || { echo "    WARN YAML invalid in $current_file - removing"; rm "$target_path"; continue; }
+            if yq e '.' "$target_path" >/dev/null 2>&1; then
+              echo "    OK $current_file (YAML valid)"
+            else
+              echo "    WARN YAML invalid in $current_file - removing"
+              rm "$target_path"
+              continue
+            fi
           else
             echo "    OK $current_file (no validation)"
           fi
@@ -290,7 +303,12 @@ $content"
       }
       echo "$content" > "$target_path"
       if command -v yq >/dev/null; then
-        yq e '.' "$target_path" >/dev/null 2>&1 && echo "    OK $current_file (YAML valid)" || { echo "    WARN YAML invalid in $current_file - removing"; rm "$target_path"; }
+        if yq e '.' "$target_path" >/dev/null 2>&1; then
+          echo "    OK $current_file (YAML valid)"
+        else
+          echo "    WARN YAML invalid in $current_file - removing"
+          rm "$target_path"
+        fi
       else
         echo "    OK $current_file (no validation)"
       fi
