@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -uo pipefail
 
@@ -249,14 +248,14 @@ $content"
           # Validar YAML con yq si disponible, sin python para evitar errores
           if command -v yq >/dev/null; then
             if yq e '.' "$target_path" >/dev/null 2>&1; then
-              echo "    OK $current_file (YAML valid)"
+              echo "    OK $current_file YAML valid"
             else
               echo "    WARN YAML invalid in $current_file - removing"
               rm "$target_path"
               continue
             fi
           else
-            echo "    OK $current_file (no validation)"
+            echo "    OK $current_file no validation"
           fi
           ((file_count_local++))
         fi
@@ -273,14 +272,14 @@ $content"
           echo "$content" > "$target_path"
           if command -v yq >/dev/null; then
             if yq e '.' "$target_path" >/dev/null 2>&1; then
-              echo "    OK $current_file (YAML valid)"
+              echo "    OK $current_file YAML valid"
             else
               echo "    WARN YAML invalid in $current_file - removing"
               rm "$target_path"
               continue
             fi
           else
-            echo "    OK $current_file (no validation)"
+            echo "    OK $current_file no validation"
           fi
           ((file_count_local++))
         fi
@@ -304,13 +303,13 @@ $content"
       echo "$content" > "$target_path"
       if command -v yq >/dev/null; then
         if yq e '.' "$target_path" >/dev/null 2>&1; then
-          echo "    OK $current_file (YAML valid)"
+          echo "    OK $current_file YAML valid"
         else
           echo "    WARN YAML invalid in $current_file - removing"
           rm "$target_path"
         fi
       else
-        echo "    OK $current_file (no validation)"
+        echo "    OK $current_file no validation"
       fi
       ((file_count_local++))
     fi
@@ -336,7 +335,7 @@ jobs:
       - name: Default Step
         run: echo "Migrated from $file"
 EOF
-      echo "    OK $default_file (generado por defecto)"
+      echo "    OK $default_file generado por defecto"
       ((file_count_local++))
       ((processed++))
     else
