@@ -15,4 +15,6 @@ for meta in ARTIFACTS.rglob("metadata.json"):
     summary["total_repos"] += 1
     summary[data["classification"]] += 1
 
-(ARTIFACTS / "enterprise-summary.json").write_text(json.dumps(summary, indent=2))
+(ARTIFACTS / "enterprise-summary.json").write_text(
+    json.dumps(summary, indent=2)
+)

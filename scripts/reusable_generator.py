@@ -2,6 +2,7 @@ import yaml
 from pathlib import Path
 
 def generate_reusable(repo_base):
+
     reusable = {
         "name": "Reusable CI",
         "on": {"workflow_call": {}},
@@ -10,7 +11,7 @@ def generate_reusable(repo_base):
                 "runs-on": "ubuntu-latest",
                 "steps": [
                     {"uses": "actions/checkout@v4"},
-                    {"run": "echo Reusable workflow executed"}
+                    {"run": "echo Running reusable workflow"}
                 ]
             }
         }
@@ -18,4 +19,4 @@ def generate_reusable(repo_base):
 
     path = repo_base / ".github/workflows/_reusable.yml"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.dump(reusable))
+    path.write_text(yaml.safe_dump(reusable, sort_keys=False))

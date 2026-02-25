@@ -1,11 +1,11 @@
-import os, re, json, yaml, requests, sys
+import os, re, json, yaml
 from pathlib import Path
 from reusable_generator import generate_reusable
 from composite_generator import generate_composite
-from pr_creator import create_pr
 
-SOURCE = Path("../source")
-ARTIFACTS = Path("artifacts")
+# SAFE PATH
+SOURCE = Path(os.environ.get("SOURCE_DIR", "../source")).resolve()
+ARTIFACTS = Path("artifacts").resolve()
 
 REPO = os.environ["REPO_NAME"]
 BRANCH = os.environ["BRANCH_NAME"]
@@ -28,12 +28,29 @@ def analyze_jenkins():
     }
 
 def analyze_shared():
-    total = 0
-    for path in SHARED_PATHS:
-        p = SOURCE / path
-        if p.exists():
-            total += len(list(p.rglob("*.groovy")))
-    return {"files": total}
+    result = {"files": 0}
+
+    if not isinstance(SHARED_PATHS, list):
+        return result
+
+    for rel in SHARED_PATHS:
+
+        rel = rel.strip().lstrip("/")
+        p = (SOURCE / rel).resolve()
+
+        # 🔒 Prevent escaping source
+        try:
+            p.relative_to(SOURCE)
+        except ValueError:
+            continue
+
+        if not p.exists() or not p.is_dir():
+            continue
+
+        groovy_files = list(p.glob("**/*.groovy"))
+        result["files"] += len(groovy_files)
+
+    return result
 
 def classify(j, s):
     score = j.get("stages",0) + j.get("parallel",0)*2 + s.get("files",0)
@@ -68,9 +85,6 @@ def main():
 
     if s["files"] > 3:
         generate_composite(repo_base)
-
-    if os.environ.get("AUTO_PR") == "true":
-        create_pr(REPO, BRANCH)
 
 if __name__ == "__main__":
     main()
