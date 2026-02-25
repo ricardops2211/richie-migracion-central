@@ -1,0 +1,96 @@
+name: Enterprise Migration Platform
+
+on:
+  push:
+    branches: [migracion-ia]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON
+        run: jq . repos-config.json
+
+      - name: Build Matrix
+        id: build
+        run: |
+          MATRIX=$(jq -c '[ 
+            .[] 
+            | (.branches // [.branch // "master"]) as $b
+            | $b[] as $branch
+            | {
+                repo: .repo,
+                branch: $branch,
+                shared_lib_path: (.shared_lib_path // []),
+                jenkins_path: (.jenkins_path // "Jenkinsfile"),
+                type: (.type // "jenkins")
+              }
+          ]' repos-config.json)
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  migrate:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+
+    steps:
+      - name: Checkout platform
+        uses: actions/checkout@v4
+        with:
+          path: platform
+
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.config.repo }}
+          ref: ${{ matrix.config.branch }}
+          token: ${{ secrets.GH_PAT }}
+          path: source
+
+      - name: Detect files
+        id: files
+        run: |
+          FILES=$(find source -type f \
+            \( -name "*.groovy" -o -name "Jenkinsfile*" -o -name "*.yml" -o -name "*.yaml" \) \
+            -not -path "*/.git/*" -printf '%P\n')
+
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Run Migration Engine
+        if: steps.files.outputs.files != ''
+        working-directory: platform
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: llama-3.3-70b-versatile
+          REPO_NAME: ${{ matrix.config.repo }}
+          BRANCH_NAME: ${{ matrix.config.branch }}
+          TYPE: ${{ matrix.config.type }}
+          JENKINS_PATH: ${{ matrix.config.jenkins_path }}
+          SHARED_LIB_PATHS: ${{ toJson(matrix.config.shared_lib_path) }}
+          FILES_TO_MIGRATE: ${{ steps.files.outputs.files }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          chmod +x scripts/migrate-with-ai.sh
+          scripts/migrate-with-ai.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-${{ matrix.config.repo }}-${{ matrix.config.branch }}
+          path: platform/artifacts
