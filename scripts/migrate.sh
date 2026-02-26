@@ -20,7 +20,7 @@ fi
 
 # Variables con defaults y validación
 GROQ_API_KEY="${GROQ_API_KEY:-}"
-GROQ_MODEL="${GROQ_MODEL:-llama-3.1-70b-versatile}"
+GROQ_MODEL="${GROQ_MODEL:-llama-3.3-70b-versatile}"
 REPO_NAME="${REPO_NAME:-unknown-repo}"
 BRANCH_NAME="${BRANCH_NAME:-unknown-branch}"
 FILES_TO_MIGRATE="${FILES_TO_MIGRATE:-}"
@@ -59,6 +59,8 @@ file_count=${#files[@]}
 processed=0
 failed=0
 summary_log="$OUTPUT_BASE/summary.json"
+error_log="$OUTPUT_BASE/errors.log"
+> "$error_log"  # Limpiar log de errores
 
 # Función para procesar archivo
 process_file() {
@@ -67,9 +69,9 @@ process_file() {
   echo "→ Procesando: $file"
 
   full_path="$SOURCE_REPO_PATH/$file"
-  [ ! -f "$full_path" ] && { echo "ERROR: Archivo no encontrado"; ((failed++)); return; }
+  [ ! -f "$full_path" ] && { echo "ERROR: Archivo no encontrado" >> "$error_log"; ((failed++)); return; }
 
-  content=$(cat "$full_path") || { echo "ERROR: Lectura fallida"; ((failed++)); return; }
+  content=$(cat "$full_path") || { echo "ERROR: Lectura fallida para $file" >> "$error_log"; ((failed++)); return; }
 
   # Detección de elementos
   libraries=$(grep -oE "@Library\('[^']+'\)" <<< "$content" | tr '\n' ', ')
@@ -114,7 +116,7 @@ $content"
         -H "Authorization: Bearer ***"  # Masked
         -H "Content-Type: application/json" \
         -d "{\"model\": \"$GROQ_MODEL\", \"messages\": [{\"role\": \"user\", \"content\": $(jq -Rs . <<< "$prompt")}], \"temperature\": 0.1, \"max_tokens\": 20000}") || {
-        echo "Curl error"; ((retry++)); sleep $(($RATE_LIMIT_DELAY * 2 ** $retry)); continue;
+        echo "Curl error para $file (retry $retry)" >> "$error_log"; ((retry++)); sleep $(($RATE_LIMIT_DELAY * 2 ** $retry)); continue;
       }
 
       http_code=$(tail -n1 <<< "$response")
@@ -124,11 +126,14 @@ $content"
         generated=$(jq -r '.choices[0].message.content // empty' <<< "$body")
         [ -n "$generated" ] && success=true
       elif [[ "$http_code" == "429" ]]; then
-        echo "Rate limit"; ((retry++)); sleep $(($RATE_LIMIT_DELAY * 2 ** $retry))
+        echo "Rate limit para $file" >> "$error_log"; ((retry++)); sleep $(($RATE_LIMIT_DELAY * 2 ** $retry))
       else
-        echo "Error: $http_code"; failed++; return
+        echo "Error: $http_code para $file" >> "$error_log"; ((failed++)); return
       fi
     done
+    if ! $success; then
+      echo "Fallo total en API para $file" >> "$error_log"; ((failed++)); return
+    fi
   fi
 
   if [ -n "$generated" ]; then
@@ -140,7 +145,7 @@ $content"
     output_dir="$OUTPUT_BASE/$safe_name"
     mkdir -p "$output_dir"
 
-    # Usar un temp y procesar (agrega validación simple)
+    # Usar un temp y procesar
     temp_file=$(mktemp)
     echo "$generated" > "$temp_file"
 
@@ -154,7 +159,7 @@ $content"
           echo "$content" > "$target_path"
           # Validación básica: chequea si empieza con 'name:' o similar
           if ! grep -qE "^(name|on|jobs):" "$target_path"; then
-            echo "Warning: YAML inválido en $current_file"
+            echo "Warning: YAML inválido en $current_file para $file" >> "$error_log"
           fi
           echo "    ✓ $current_file"
         fi
@@ -166,20 +171,42 @@ $content"
         content+="$line\n"
       fi
     done < "$temp_file"
+    # Guardar el último si existe
+    if [ -n "$current_file" ]; then
+      target_path="$output_dir/$current_file"
+      mkdir -p "$(dirname "$target_path")"
+      echo "$content" > "$target_path"
+      if ! grep -qE "^(name|on|jobs):" "$target_path"; then
+        echo "Warning: YAML inválido en $current_file para $file" >> "$error_log"
+      fi
+      echo "    ✓ $current_file"
+    fi
     rm "$temp_file"
 
     ((processed++))
   else
+    echo "No generado para $file" >> "$error_log"
     ((failed++))
   fi
 }
 
-# Procesamiento paralelo (limita a 2 para API)
-printf '%s\n' "${files[@]}" | xargs -I {} -P 2 bash -c 'process_file "$@"' _ {}
+# Procesamiento secuencial (fijo)
+if [ ${#files[@]} -eq 0 ]; then
+  echo "No hay archivos para procesar"
+else
+  for file in "${files[@]}"; do
+    process_file "$file" || echo "Error general en $file" >> "$error_log"
+    sleep "$RATE_LIMIT_DELAY"  # Pausa para evitar rate limits
+  done
+fi
 
 # Resumen
 echo "=== Resumen ==="
 echo "Total: $file_count | Éxitos: $processed | Fallos: $failed"
+if [ -s "$error_log" ]; then
+  echo "Errores encontrados, ver $error_log:"
+  cat "$error_log"
+fi
 
 # Genera JSON
 jq -n --arg total "$file_count" --arg success "$processed" --arg fail "$failed" \
