@@ -37,7 +37,7 @@ done
 
 if [ -z "$FILES_TO_MIGRATE" ]; then
   echo "Escaneando archivos automáticamente..."
-  FILES_TO_MIGRATE=$(find "../source-repo" -name "Jenkinsfile" -o -path "*/vars/*.groovy" | sed 's|^../source-repo/||')
+  FILES_TO_MIGRATE=$(find "../source-repo" -name "Jenkinsfile" -o -path "*/vars/*.groovy" -o -name "*.yml" | sed 's|^../source-repo/||')
 fi
 
 # Arrays para procesamiento
@@ -50,6 +50,10 @@ echo "BRANCH_NAME: $BRANCH_NAME"
 echo "TYPE: $TYPE"
 echo "Archivos: ${#files[@]}"
 echo "============="
+
+# Chequeo de dependencias
+command -v curl >/dev/null || { echo "ERROR: curl no instalado"; exit 1; }
+command -v jq >/dev/null || { echo "ERROR: jq no instalado"; exit 1; }
 
 SOURCE_REPO_PATH="../source-repo"
 OUTPUT_BASE="artifacts/${REPO_NAME}/${BRANCH_NAME}"
@@ -69,7 +73,7 @@ process_file() {
   echo "→ Procesando: $file"
 
   full_path="$SOURCE_REPO_PATH/$file"
-  [ ! -f "$full_path" ] && { echo "ERROR: Archivo no encontrado" >> "$error_log"; ((failed++)); return; }
+  [ ! -f "$full_path" ] && { echo "ERROR: Archivo no encontrado: $full_path" >> "$error_log"; ((failed++)); return; }
 
   content=$(cat "$full_path") || { echo "ERROR: Lectura fallida para $file" >> "$error_log"; ((failed++)); return; }
 
@@ -78,7 +82,7 @@ process_file() {
   secrets=$(grep -oE "(credentials|withCredentials|SECRET|PASSWORD|KEY)" <<< "$content" | sort -u | tr '\n' ', ')
   extra_info=""
   [ -n "$libraries" ] && extra_info+="Detectado @Library: $libraries. Conviértelo a composite actions en .github/actions/. "
-  [ -n "$secrets" ] && extra_info+="Detectados secrets: $secrets. Usa ${{ secrets.NAME }} y agrega # TODO: Configura en settings. "
+  [ -n "$secrets" ] && extra_info+="Detectados secrets: $secrets. Usa \${{ secrets.NAME }} y agrega # TODO: Configura en settings. "
 
   base_name=$(basename "$file" | sed 's/\.[^.]*$//')
 
@@ -108,14 +112,21 @@ $content"
     generated="##FILE: dummy.yml\nname: test"  # Simulado
   else
     # Llamada a API con mejoras (backoff exponencial, timeout)
+    # Nota: Comentario movido aquí para evitar errores en multilínea
+    # Authorization masked como Bearer ***
     max_retries=5
     retry=0
     success=false
     while [ $retry -lt $max_retries ] && ! $success; do
-      response=$(curl -s --max-time 60 -w "\n%{http_code}" https://api.groq.com/openai/v1/chat/completions \
-        -H "Authorization: Bearer ***"  # Masked
+      # Preparar body JSON por separado para claridad
+      json_body=$(jq -n --arg model "$GROQ_MODEL" --arg content "$(jq -Rs . <<< "$prompt")" \
+        '{model: $model, messages: [{role: "user", content: $content}], temperature: 0.1, max_tokens: 20000}')
+
+      response=$(curl -s --max-time 60 -w "\n%{http_code}" \
+        https://api.groq.com/openai/v1/chat/completions \
+        -H "Authorization: Bearer $GROQ_API_KEY" \
         -H "Content-Type: application/json" \
-        -d "{\"model\": \"$GROQ_MODEL\", \"messages\": [{\"role\": \"user\", \"content\": $(jq -Rs . <<< "$prompt")}], \"temperature\": 0.1, \"max_tokens\": 20000}") || {
+        -d "$json_body") || {
         echo "Curl error para $file (retry $retry)" >> "$error_log"; ((retry++)); sleep $(($RATE_LIMIT_DELAY * 2 ** $retry)); continue;
       }
 
@@ -140,12 +151,11 @@ $content"
     # Reemplazos adicionales
     generated="${generated//\$base_name/$base_name}"
 
-    # Procesar salida (similar, pero valida YAML)
+    # Procesar salida
     safe_name=$(echo "$base_name" | sed 's/[^a-zA-Z0-9._-]/_/g')
     output_dir="$OUTPUT_BASE/$safe_name"
     mkdir -p "$output_dir"
 
-    # Usar un temp y procesar
     temp_file=$(mktemp)
     echo "$generated" > "$temp_file"
 
@@ -157,7 +167,6 @@ $content"
           target_path="$output_dir/$current_file"
           mkdir -p "$(dirname "$target_path")"
           echo "$content" > "$target_path"
-          # Validación básica: chequea si empieza con 'name:' o similar
           if ! grep -qE "^(name|on|jobs):" "$target_path"; then
             echo "Warning: YAML inválido en $current_file para $file" >> "$error_log"
           fi
@@ -184,19 +193,19 @@ $content"
     rm "$temp_file"
 
     ((processed++))
+    sleep "$RATE_LIMIT_DELAY"  # Pausa solo después de éxito
   else
     echo "No generado para $file" >> "$error_log"
     ((failed++))
   fi
 }
 
-# Procesamiento secuencial (fijo)
+# Procesamiento secuencial
 if [ ${#files[@]} -eq 0 ]; then
   echo "No hay archivos para procesar"
 else
   for file in "${files[@]}"; do
     process_file "$file" || echo "Error general en $file" >> "$error_log"
-    sleep "$RATE_LIMIT_DELAY"  # Pausa para evitar rate limits
   done
 fi
 
