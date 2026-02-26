@@ -1,0 +1,27 @@
+[
+  {
+    "repo": "ricardops2211/richie-jenkins-shared-lib",
+    "branches": ["master"],
+    "shared_lib_path": "vars/",
+    "jenkins_path": "Jenkinsfile-example",
+    "type": "jenkins"
+  },
+  {
+    "repo": "boozallen/sdp-libraries",
+    "branch": "main",
+    "shared_lib_path": "vars/",
+    "type": "jenkins"
+  },
+  {
+    "repo": "ricardops2211/richie-azure-devops-templates",
+    "branch": "master",
+    "shared_lib_path": "templates/",
+    "type": "azure"
+  },
+  {
+    "repo": "ricardops2211/richie-jenkins-shared-lib",
+    "branches": ["databricks"],
+    "shared_lib_path": ["vars/", "src/"],
+    "type": "jenkins"
+  }
+]
