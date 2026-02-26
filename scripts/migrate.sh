@@ -1,4 +1,3 @@
-```shellscript
 #!/usr/bin/env bash
 set -uo pipefail
 
@@ -255,4 +254,3 @@ jq -n --arg total "$file_count" --arg success "$processed" --arg fail "$failed" 
 find "$OUTPUT_BASE" -type f | head -30 | sed 's/^/  /'
 
 exit 0
-```
