@@ -1,24 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Usage: ./script.sh [--dry-run] [--config .env]
-DRY_RUN=false
-CONFIG_FILE=""
-
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --dry-run) DRY_RUN=true; shift ;;
-    --config) CONFIG_FILE="$2"; shift 2 ;;
-    *) echo "Opción desconocida: $1"; exit 1 ;;
-  esac
-done
-
-# Cargar config si existe
-if [ -n "$CONFIG_FILE" ] && [ -f "$CONFIG_FILE" ]; then
-  source "$CONFIG_FILE"
-fi
-
-# Variables con defaults y validación
+# Variables requeridas desde el workflow
 GROQ_API_KEY="${GROQ_API_KEY:-}"
 GROQ_MODEL="${GROQ_MODEL:-llama-3.3-70b-versatile}"
 REPO_NAME="${REPO_NAME:-unknown-repo}"
@@ -27,230 +10,439 @@ FILES_TO_MIGRATE="${FILES_TO_MIGRATE:-}"
 TYPE="${TYPE:-unknown}"
 RATE_LIMIT_DELAY="${RATE_LIMIT_DELAY:-4}"
 
-# Validación estricta
-required_vars=("GROQ_API_KEY" "REPO_NAME" "BRANCH_NAME")
-for var in "${required_vars[@]}"; do
-  if [ -z "${!var}" ]; then
-    echo "ERROR: $var no está definida"; exit 1
-  fi
-done
-
-if [ -z "$FILES_TO_MIGRATE" ]; then
-  echo "Escaneando archivos automáticamente..."
-  FILES_TO_MIGRATE=$(find "../source-repo" -name "Jenkinsfile" -o -path "*/vars/*.groovy" -o -name "*.yml" | sed 's|^../source-repo/||')
-fi
-
-# Arrays para procesamiento
-mapfile -t files < <(echo "$FILES_TO_MIGRATE")
-
-echo "=== DEBUG ==="
+echo "=== DEBUG GROQ ==="
 echo "GROQ_MODEL: $GROQ_MODEL"
 echo "REPO_NAME: $REPO_NAME"
 echo "BRANCH_NAME: $BRANCH_NAME"
 echo "TYPE: $TYPE"
-echo "Archivos: ${#files[@]}"
-echo "============="
+echo "PWD: $(pwd)"
+echo "==================="
 
-# Chequeo de dependencias
-command -v curl >/dev/null || { echo "ERROR: curl no instalado"; exit 1; }
-command -v jq >/dev/null || { echo "ERROR: jq no instalado"; exit 1; }
+if [ -z "$GROQ_API_KEY" ]; then
+  echo "ERROR: GROQ_API_KEY no está definida"
+  exit 1
+fi
+
+if [ -z "$FILES_TO_MIGRATE" ]; then
+  echo "No hay archivos para migrar"
+  exit 0
+fi
 
 SOURCE_REPO_PATH="../source-repo"
 OUTPUT_BASE="artifacts/${REPO_NAME}/${BRANCH_NAME}"
+
+
+
 mkdir -p "$OUTPUT_BASE" || { echo "ERROR: No se pudo crear $OUTPUT_BASE"; exit 1; }
 
-file_count=${#files[@]}
+echo "DEBUG: Verificando rutas:"
+echo "  PWD: $(pwd)"
+echo "  SOURCE_REPO_PATH existe: $([ -d "$SOURCE_REPO_PATH" ] && echo "SÍ" || echo "NO")"
+echo "  OUTPUT_BASE: $OUTPUT_BASE"
+echo ""
+
+file_count=0
 processed=0
 failed=0
-summary_log="$OUTPUT_BASE/summary.json"
-error_log="$OUTPUT_BASE/errors.log"
-> "$error_log"  # Limpiar log de errores
 
-# Función para procesar archivo
-process_file() {
-  local file="$1"
+echo "Iniciando procesamiento de archivos..."
+echo ""
+
+while IFS= read -r file || [ -n "$file" ]; do
+  [ -z "$file" ] && continue
+  
+  ((file_count++))
   file=$(echo "$file" | xargs)
-  echo "→ Procesando: $file"
-
+  
+  echo "→ [$(printf "%2d" $((processed + failed + 1)))/$file_count] Procesando: $file"
+  
   full_path="$SOURCE_REPO_PATH/$file"
-  [ ! -f "$full_path" ] && { echo "ERROR: Archivo no encontrado: $full_path" >> "$error_log"; ((failed++)); return; }
-
-  content=$(cat "$full_path") || { echo "ERROR: Lectura fallida para $file" >> "$error_log"; ((failed++)); return; }
-
-  # Detección de elementos
-  libraries=$(grep -oE "@Library\('[^']+'\)" <<< "$content" | tr '\n' ', ')
-  secrets=$(grep -oE "(credentials|withCredentials|SECRET|PASSWORD|KEY)" <<< "$content" | sort -u | tr '\n' ', ')
-  extra_info=""
-  [ -n "$libraries" ] && extra_info+="Detectado @Library: $libraries. Conviértelo a composite actions en .github/actions/. "
-  [ -n "$secrets" ] && extra_info+="Detectados secrets: $secrets. Usa \${{ secrets.NAME }} y agrega # TODO: Configura en settings. "
-
-  base_name=$(basename "$file" | sed 's/\.[^.]*$//')
-
-  # Prompt mejorado
-  prompt="Eres un experto DevOps. Convierte a GitHub Actions YAML.
-
-INFO: Nombre: $file, Base: $base_name, Tipo: $TYPE
-$extra_info
-
-REGLAS:
-1. Múltiples archivos: Separa con '---ARCHIVO_SEPARATOR---'
-2. Antes de YAML: '##FILE: ruta/archivo.yml'
-3. Reemplaza: \${FILE_NAME}/\${APP_NAME} → $base_name
-4. .groovy en vars/ → .github/actions/$base_name/action.yml (composite)
-5. Jenkinsfile → .github/workflows/$base_name.yml (reusable con workflow_call)
-6. Maneja @Library: Crea actions separadas.
-7. Secrets: Usa secrets context, agrega TODO.
-8. Incluye cache, retries, error handling.
-9. Maneja stages/parallel/tools/post.
-10. YAML válido y completo. Sin explicaciones. SOLO genera YAML válido para GHA. NO generes archivos Groovy u otros.
-
-Contenido:
-$content"
-
-  if $DRY_RUN; then
-    echo "  [Dry-run] Prompt: ${prompt:0:100}..."
-    generated="##FILE: dummy.yml\nname: test"  # Simulado
-  else
-    # Llamada a API con mejoras (backoff exponencial, timeout)
-    # Nota: Comentario movido aquí para evitar errores en multilínea
-    # Authorization masked como Bearer ***
-    max_retries=5
-    retry=0
-    success=false
-    while [ $retry -lt $max_retries ] && ! $success; do
-      # Preparar body JSON por separado para claridad
-      json_body=$(jq -n --arg model "$GROQ_MODEL" --arg content "$(jq -Rs . <<< "$prompt")" \
-        '{model: $model, messages: [{role: "user", content: $content}], temperature: 0.1, max_tokens: 20000}')
-
-      response=$(curl -s --max-time 60 -w "\n%{http_code}" \
-        https://api.groq.com/openai/v1/chat/completions \
-        -H "Authorization: Bearer $GROQ_API_KEY" \
-        -H "Content-Type: application/json" \
-        -d "$json_body") || {
-        echo "Curl error para $file (retry $retry)" >> "$error_log"; ((retry++)); sleep $(($RATE_LIMIT_DELAY * 2 ** $retry)); continue;
-      }
-
-      http_code=$(tail -n1 <<< "$response")
-      body=$(head -n-1 <<< "$response")
-
-      if [ "$http_code" = "200" ]; then
-        generated=$(jq -r '.choices[0].message.content // empty' <<< "$body")
-        [ -n "$generated" ] && success=true
-      elif [[ "$http_code" == "429" ]]; then
-        echo "Rate limit para $file" >> "$error_log"; ((retry++)); sleep $(($RATE_LIMIT_DELAY * 2 ** $retry))
-      else
-        echo "Error: $http_code para $file" >> "$error_log"; ((failed++)); return
-      fi
-    done
-    if ! $success; then
-      echo "Fallo total en API para $file" >> "$error_log"; ((failed++)); return
-    fi
+  
+  # Verificar que el archivo existe
+  if [ ! -f "$full_path" ]; then
+    echo "ERROR: Archivo no encontrado: $full_path"
+    ((failed++))
+    continue
   fi
+  
+  echo "Archivo encontrado"
+  
+  # Leer contenido del archivo
+  content=$(cat "$full_path" 2>&1) || {
+    echo "ERROR: No se pudo leer el archivo"
+    ((failed++))
+    continue
+  }
+  
+  # Extraer nombre base del archivo para usarlo en rutas
+  base_name=$(basename "$file" | sed 's/\.[^.]*$//')
+  
+prompt="Eres un DevOps Architect experto en migraciones enterprise de Jenkins a GitHub Actions.
 
-  if [ -n "$generated" ]; then
-    # Reemplazos adicionales
+Tu tarea es convertir el archivo proporcionado a una implementación moderna, segura y enterprise-ready en GitHub Actions.
+
+INFORMACIÓN DEL ARCHIVO:
+- Nombre: $file
+- Nombre base: $base_name
+- Tipo: $TYPE
+
+CONTEXTO DE MIGRACIÓN:
+- Origen: Jenkins (Declarative o Scripted Pipeline)
+- Destino: GitHub Actions
+- Entorno enterprise con múltiples repos y reusable components
+
+========================
+REGLAS CRÍTICAS OBLIGATORIAS
+========================
+
+FORMATO DE SALIDA:
+1. Si generas MÚLTIPLES archivos, sepáralos EXACTAMENTE con:
+   ---ARCHIVO_SEPARATOR---
+2. ANTES de cada archivo YAML escribe EXACTAMENTE:
+   ##FILE: ruta/del/archivo.yml
+3. NO incluyas explicaciones.
+4. SOLO genera YAML válido.
+5. Cada archivo debe ser COMPLETO y funcional.
+
+========================
+REGLAS DE MIGRACIÓN AVANZADA
+========================
+
+🔹 1. Shared Libraries (@Library)
+Si detectas:
+  @Library('nombre-lib') _
+  @Library('nombre-lib@branch')
+
+DEBES:
+- Extraer la lógica reutilizable.
+- Convertir cada función de vars/*.groovy en:
+  .github/actions/<function-name>/action.yml (Composite Action)
+- Si la librería representa un pipeline reutilizable completo:
+  generar .github/workflows/<name>.yml con workflow_call
+
+NO ignores shared libraries.
+NO las dejes como comentarios.
+TRANSFÓRMALAS en componentes reutilizables reales.
+
+🔹 2. Jenkinsfile
+Si el archivo es Jenkinsfile:
+Genera:
+  .github/workflows/${base_name}.yml
+
+Debe usar:
+  on:
+    workflow_call:
+    push:
+    pull_request:
+
+Si el pipeline es reusable → usar workflow_call con inputs y secrets.
+
+🔹 3. stages → jobs
+- Cada stage principal debe convertirse en un job.
+- Si hay parallel → usar matrix o múltiples jobs.
+- Mantener dependencias con needs:
+
+🔹 4. agent
+agent any → runs-on: ubuntu-latest
+agent { label 'docker' } → usar container:
+agent docker → usar container:
+
+🔹 5. environment / credentials
+- credentialsId → secrets.<NAME>
+- withCredentials → env + secrets
+- Nunca hardcodear secretos.
+
+🔹 6. tools (maven, node, jdk, etc.)
+Traducir a:
+- actions/setup-java
+- actions/setup-node
+- actions/setup-python
+según corresponda.
+
+🔹 7. cache obligatorio
+Siempre incluir:
+- actions/cache
+Para:
+  ~/.m2
+  ~/.npm
+  ~/.gradle
+  ~/.cache
+según stack detectado.
+
+🔹 8. Robustez Enterprise
+Siempre incluir:
+- concurrency
+- retry strategy cuando aplique
+- fail-fast control en matrix
+- timeout-minutes
+- continue-on-error solo si es lógico
+- control de branches
+- permissions mínimas necesarias
+
+🔹 9. Post actions
+post {
+  always
+  success
+  failure
+}
+Traducir usando:
+  if: always()
+  if: failure()
+  if: success()
+
+🔹 10. Reemplazo de variables
+Reemplaza COMPLETAMENTE:
+  \${FILE_NAME} → $base_name
+  \${APP_NAME} → $base_name
+  \$file → $file
+
+NO dejes placeholders sin resolver.
+
+========================
+ESTÁNDARES OBLIGATORIOS
+========================
+
+Cada workflow debe incluir:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${base_name}-\${{ github.ref }}
+  cancel-in-progress: true
+
+timeout-minutes: 30
+
+Uso de:
+- actions/checkout@v4
+- setup tools oficiales
+- cache optimizado por hashFiles
+- strategy.matrix si aplica
+- workflow_call cuando sea reusable
+
+========================
+SALIDA EJEMPLO (FORMATO)
+========================
+
+##FILE: .github/actions/$base_name/action.yml
+name: $base_name
+description: Composite action for $base_name
+runs:
+  using: composite
+  steps:
+    - name: Execute logic
+      shell: bash
+      run: echo \"Running $base_name\"
+
+---ARCHIVO_SEPARATOR---
+
+##FILE: .github/workflows/${base_name}.yml
+name: ${base_name}
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${base_name}-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+========================
+
+Contenido a convertir:
+$content
+"
+
+  echo "  Enviando a Groq API..."
+  
+  max_retries=3
+  retry=0
+  success=false
+  generated=""
+  
+  while [ $retry -lt $max_retries ] && [ "$success" = false ]; do
+    echo "    [Intento $((retry + 1))/$max_retries]"
+    
+    response=$(curl -s -w "\n%{http_code}" https://api.groq.com/openai/v1/chat/completions \
+      -H "Authorization: Bearer $GROQ_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "{
+        \"model\": \"$GROQ_MODEL\",
+        \"messages\": [{\"role\": \"user\", \"content\": $(printf '%s\n' "$prompt" | jq -Rs .)}],
+        \"temperature\": 0.2,
+        \"max_tokens\": 15000
+      }" 2>&1) || {
+        echo "Error en curl"
+        ((retry++))
+        [ $retry -lt $max_retries ] && sleep $((RATE_LIMIT_DELAY + retry))
+        continue
+      }
+    
+    # Separar respuesta del código HTTP
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n-1)
+    
+    echo "    HTTP Code: $http_code"
+    
+    if [ "$http_code" = "200" ]; then
+      generated=$(echo "$body" | jq -r '.choices[0].message.content // empty' 2>/dev/null) || {
+        echo "Error parseando JSON"
+        ((retry++))
+        [ $retry -lt $max_retries ] && sleep $((RATE_LIMIT_DELAY + retry))
+        continue
+      }
+      
+      if [ -n "$generated" ]; then
+        success=true
+        echo "Respuesta recibida ($(echo "$generated" | wc -c) caracteres)"
+        break
+      fi
+    else
+      error_msg=$(echo "$body" | jq -r '.error.message // "Error desconocido"' 2>/dev/null)
+      
+      if [[ "$error_msg" == *"Rate limit"* ]]; then
+        ((retry++))
+        if [ $retry -lt $max_retries ]; then
+          wait_time=$((RATE_LIMIT_DELAY + retry * 2))
+          echo "Rate limit. Esperando ${wait_time}s..."
+          sleep "$wait_time"
+        fi
+      else
+        echo "Error Groq: $error_msg"
+        ((failed++))
+        success=false
+        break
+      fi
+    fi
+  done
+  
+  if [ "$success" = true ] && [ -n "$generated" ]; then
+    safe_name=$(basename "$file" | sed 's/\.[^.]*$//' | sed 's/[^a-zA-Z0-9._-]/_/g')
+    output_dir="$OUTPUT_BASE/$safe_name"
+    mkdir -p "$output_dir" || {
+      echo "No se pudo crear directorio: $output_dir"
+      ((failed++))
+      continue
+    }
+    
+    # Reemplazar variables en la salida de Groq
     generated="${generated//\$base_name/$base_name}"
-
-    # Procesar salida
-    safe_name=$(echo "$base_name" | sed 's/[^a-zA-Z0-9._-]/_/g')
-    output_dir="$OUTPUT_BASE/.github"  # Aplanar: Todo en .github/
-    mkdir -p "$output_dir/workflows" "$output_dir/actions"
-
+    generated="${generated//\${base_name}/$base_name}"
+    
+    # Procesar la salida con bash en lugar de awk para mejor control
     temp_file=$(mktemp)
     echo "$generated" > "$temp_file"
-
+    
+    # Usar bash para procesar línea por línea
     current_file=""
     content=""
-    generated_files=()  # Array para trackear y evitar duplicados
+    file_count_local=0
+    
     while IFS= read -r line || [ -n "$line" ]; do
-      if [[ "$line" == "---ARCHIVO_SEPARATOR---" ]] || [[ "$line" =~ ^##FILE: ]]; then
+      if [ "$line" = "---ARCHIVO_SEPARATOR---" ]; then
+        # Guardar archivo anterior
         if [ -n "$current_file" ]; then
-          # Validación estricta: Solo guarda si parece YAML válido
-          if grep -qE "^(name|on|jobs):" <<< "$content"; then
-            # Ajusta path para aplanar: e.g., workflows/$safe_name-$current_file si es workflow
-            if [[ "$current_file" =~ workflows ]]; then
-              target_path="$output_dir/workflows/${safe_name}-${current_file##*/}"
-            else
-              target_path="$output_dir/actions/${safe_name}-${current_file##*/}"
-            fi
-            # Evita duplicados
-            if [[ ! " ${generated_files[*]} " =~ " ${target_path} " ]]; then
-              mkdir -p "$(dirname "$target_path")"
-              echo "$content" > "$target_path"
-              generated_files+=("$target_path")
-              echo "    ✓ ${target_path##$OUTPUT_BASE/}"
-            else
-              echo "    Skip duplicado: $current_file"
-            fi
-          else
-            echo "Warning: YAML inválido, no guardando $current_file para $file" >> "$error_log"
-          fi
+          target_path="$output_dir/$current_file"
+          target_dir=$(dirname "$target_path")
+          mkdir -p "$target_dir" || {
+            echo "No se pudo crear $target_dir"
+            continue
+          }
+          echo "$content" > "$target_path"
+          echo "    ✓ $current_file"
+          ((file_count_local++))
         fi
-        if [[ "$line" =~ ^##FILE: ]]; then
-          current_file="${line#*##FILE: }"
+        current_file=""
+        content=""
+      elif [[ "$line" =~ ^##FILE:\ * ]]; then
+        # Guardar archivo anterior
+        if [ -n "$current_file" ]; then
+          target_path="$output_dir/$current_file"
+          target_dir=$(dirname "$target_path")
+          mkdir -p "$target_dir" || {
+            echo "No se pudo crear $target_dir"
+            continue
+          }
+          echo "$content" > "$target_path"
+          echo "    ✓ $current_file"
+          ((file_count_local++))
         fi
+        # Extraer nuevo nombre de archivo
+        current_file="${line#*##FILE: }"
+        current_file="${current_file# }"
         content=""
       else
-        content+="$line\n"
+        # Acumular contenido
+        if [ -n "$current_file" ]; then
+          content+="$line"$'\n'
+        fi
       fi
     done < "$temp_file"
-    # Guardar el último si existe
+    
+    # Guardar último archivo
     if [ -n "$current_file" ]; then
-      if grep -qE "^(name|on|jobs):" <<< "$content"; then
-        if [[ "$current_file" =~ workflows ]]; then
-          target_path="$output_dir/workflows/${safe_name}-${current_file##*/}"
-        else
-          target_path="$output_dir/actions/${safe_name}-${current_file##*/}"
-        fi
-        if [[ ! " ${generated_files[*]} " =~ " ${target_path} " ]]; then
-          mkdir -p "$(dirname "$target_path")"
-          echo "$content" > "$target_path"
-          generated_files+=("$target_path")
-          echo "    ✓ ${target_path##$OUTPUT_BASE/}"
-        else
-          echo "    Skip duplicado: $current_file"
-        fi
-      else
-        echo "Warning: YAML inválido, no guardando $current_file para $file" >> "$error_log"
-      fi
+      target_path="$output_dir/$current_file"
+      target_dir=$(dirname "$target_path")
+      mkdir -p "$target_dir" || {
+        echo "No se pudo crear $target_dir"
+      }
+      echo "$content" > "$target_path"
+      echo "    ✓ $current_file"
+      ((file_count_local++))
     fi
-    rm "$temp_file"
-
-    if [ ${#generated_files[@]} -gt 0 ]; then
+    
+    rm -f "$temp_file"
+    
+    if [ $file_count_local -gt 0 ]; then
+      echo "Completado ($file_count_local archivo(s))"
       ((processed++))
-      sleep "$RATE_LIMIT_DELAY"  # Pausa solo después de éxito
     else
-      echo "No generado para $file" >> "$error_log"
+      echo "No se generaron archivos"
       ((failed++))
     fi
+    
+    if [ $((processed + failed)) -lt $file_count ]; then
+      sleep "$RATE_LIMIT_DELAY"
+    fi
   else
-    echo "No generado para $file" >> "$error_log"
+    echo "No se pudo procesar"
     ((failed++))
   fi
-}
+  
+  echo ""
+  
+done <<< "$FILES_TO_MIGRATE"
 
-# Procesamiento secuencial
-if [ ${#files[@]} -eq 0 ]; then
-  echo "No hay archivos para procesar"
+echo "=== Resumen final ==="
+echo "Total archivos procesados: $file_count"
+echo "Éxitos: $processed"
+echo "Fallos: $failed"
+echo ""
+
+ARTIFACT_ROOT="artifacts"
+
+
+if [ -d "$ARTIFACT_ROOT" ]; then
+  total_files=$(find "$ARTIFACT_ROOT" -type f 2>/dev/null | wc -l)
+  echo "$total_files archivos generados:"
+  find "$ARTIFACT_ROOT" -type f | head -30 | sed 's/^/  /'
 else
-  for file in "${files[@]}"; do
-    process_file "$file" || echo "Error general en $file" >> "$error_log"
-  done
+  echo "No hay archivos generados"
 fi
 
-# Resumen
-echo "=== Resumen ==="
-echo "Total: $file_count | Éxitos: $processed | Fallos: $failed"
-if [ -s "$error_log" ]; then
-  echo "Errores encontrados, ver $error_log:"
-  cat "$error_log"
-fi
 
-# Genera JSON
-jq -n --arg total "$file_count" --arg success "$processed" --arg fail "$failed" \
-  '{total: $total, success: $success, fail: $fail}' > "$summary_log"
 
-# Lista archivos
-find "$OUTPUT_BASE" -type f | head -30 | sed 's/^/  /'
 
 exit 0
