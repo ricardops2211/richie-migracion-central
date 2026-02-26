@@ -77,132 +77,132 @@ while IFS= read -r file || [ -n "$file" ]; do
   # Extraer nombre base del archivo para usarlo en rutas
   base_name=$(basename "$file" | sed 's/\.[^.]*$//')
   
-prompt="Eres un DevOps Architect experto en migraciones enterprise de Jenkins a GitHub Actions.
+prompt="You are a Senior DevOps Platform Architect specializing in enterprise-scale Jenkins-to-GitHub-Actions migrations with modular reusable workflow architecture.
 
-Tu tarea es convertir el archivo proporcionado a una implementación moderna, segura y enterprise-ready en GitHub Actions.
+Your objective is NOT just to convert the pipeline.
+Your objective is to design a modern, modular, reusable, production-grade CI/CD architecture.
 
-INFORMACIÓN DEL ARCHIVO:
-- Nombre: $file
-- Nombre base: $base_name
-- Tipo: $TYPE
+INFORMATION:
+- Source file: $file
+- Base name: $base_name
+- Type: $TYPE
+- Target repository: $REPO_NAME
+- Branch: $BRANCH_NAME
 
-CONTEXTO DE MIGRACIÓN:
-- Origen: Jenkins (Declarative o Scripted Pipeline)
-- Destino: GitHub Actions
-- Entorno enterprise con múltiples repos y reusable components
+========================================
+ARCHITECTURAL OBJECTIVE
+========================================
 
-========================
-REGLAS CRÍTICAS OBLIGATORIAS
-========================
+1. Detect reusable logic automatically.
+2. Extract reusable components when possible.
+3. Create reusable workflows using workflow_call.
+4. Connect workflows properly using \"uses:\".
+5. Avoid duplication.
+6. Design as if this repository belongs to a shared CI/CD platform ecosystem.
 
-FORMATO DE SALIDA:
-1. Si generas MÚLTIPLES archivos, sepáralos EXACTAMENTE con:
-   ---ARCHIVO_SEPARATOR---
-2. ANTES de cada archivo YAML escribe EXACTAMENTE:
-   ##FILE: ruta/del/archivo.yml
-3. NO incluyas explicaciones.
-4. SOLO genera YAML válido.
-5. Cada archivo debe ser COMPLETO y funcional.
+DO NOT generate a monolithic workflow if modularization is possible.
 
-========================
-REGLAS DE MIGRACIÓN AVANZADA
-========================
+========================================
+INTELLIGENT DETECTION RULES
+========================================
 
-🔹 1. Shared Libraries (@Library)
-Si detectas:
-  @Library('nombre-lib') _
-  @Library('nombre-lib@branch')
+1) SHARED LIBRARIES (@Library)
 
-DEBES:
-- Extraer la lógica reutilizable.
-- Convertir cada función de vars/*.groovy en:
-  .github/actions/<function-name>/action.yml (Composite Action)
-- Si la librería representa un pipeline reutilizable completo:
-  generar .github/workflows/<name>.yml con workflow_call
+If you detect:
+  @Library('lib-name')
+  @Library('lib-name@branch')
 
-NO ignores shared libraries.
-NO las dejes como comentarios.
-TRANSFÓRMALAS en componentes reutilizables reales.
+You MUST:
 
-🔹 2. Jenkinsfile
-Si el archivo es Jenkinsfile:
-Genera:
-  .github/workflows/${base_name}.yml
+A) If it represents reusable step logic:
+   → Create:
+      .github/actions/<function-name>/action.yml
+   using composite actions.
 
-Debe usar:
-  on:
-    workflow_call:
-    push:
-    pull_request:
+B) If it represents a reusable pipeline:
+   → Create:
+      .github/workflows/<lib-name>-reusable.yml
+      with:
+        on:
+          workflow_call:
 
-Si el pipeline es reusable → usar workflow_call con inputs y secrets.
+C) The main workflow MUST call the reusable workflow using:
+      jobs:
+        job_id:
+          uses: ./.github/workflows/<lib-name>-reusable.yml
+          with:
+            <inputs>
+          secrets: inherit
 
-🔹 3. stages → jobs
-- Cada stage principal debe convertirse en un job.
-- Si hay parallel → usar matrix o múltiples jobs.
-- Mantener dependencias con needs:
+NEVER leave shared libraries embedded.
+They must be transformed into reusable components.
 
-🔹 4. agent
-agent any → runs-on: ubuntu-latest
-agent { label 'docker' } → usar container:
-agent docker → usar container:
+========================================
+REUSABLE WORKFLOW EXTRACTION LOGIC
+========================================
 
-🔹 5. environment / credentials
+When detecting repeatable patterns such as:
+
+- Standard build stages
+- Test pipelines
+- Docker build & push
+- Deploy logic
+- Terraform
+- SonarQube analysis
+- Maven / Gradle / Node builds
+- Artifact publishing
+- Slack / Teams notifications
+
+You MUST:
+
+1) Extract them into:
+   .github/workflows/<name>-reusable.yml
+
+2) Define:
+   on:
+     workflow_call:
+       inputs:
+       secrets:
+
+3) Pass parameters dynamically via:
+   with:
+
+4) Connect from main workflow via:
+   uses:
+   secrets: inherit
+
+========================================
+WORKFLOW CONNECTION RULES
+========================================
+
+✔ Always use secrets: inherit for reusable workflows
+✔ Pass only necessary inputs
+✔ Avoid duplicating build logic
+✔ Separate orchestration from execution
+✔ Keep the main workflow lightweight
+
+If pipeline is simple → keep simple.
+If complex → modularize.
+
+========================================
+ADVANCED MIGRATION RULES
+========================================
+
+- stages → jobs
+- parallel → matrix strategy
+- agent any → runs-on: ubuntu-latest
+- docker agent → container:
 - credentialsId → secrets.<NAME>
 - withCredentials → env + secrets
-- Nunca hardcodear secretos.
+- tools (maven/node/jdk/python) → official setup actions
+- post { always / success / failure } → if: always() / success() / failure()
+- environment blocks → environment:
 
-🔹 6. tools (maven, node, jdk, etc.)
-Traducir a:
-- actions/setup-java
-- actions/setup-node
-- actions/setup-python
-según corresponda.
+========================================
+ENTERPRISE STANDARDS (MANDATORY)
+========================================
 
-🔹 7. cache obligatorio
-Siempre incluir:
-- actions/cache
-Para:
-  ~/.m2
-  ~/.npm
-  ~/.gradle
-  ~/.cache
-según stack detectado.
-
-🔹 8. Robustez Enterprise
-Siempre incluir:
-- concurrency
-- retry strategy cuando aplique
-- fail-fast control en matrix
-- timeout-minutes
-- continue-on-error solo si es lógico
-- control de branches
-- permissions mínimas necesarias
-
-🔹 9. Post actions
-post {
-  always
-  success
-  failure
-}
-Traducir usando:
-  if: always()
-  if: failure()
-  if: success()
-
-🔹 10. Reemplazo de variables
-Reemplaza COMPLETAMENTE:
-  \${FILE_NAME} → $base_name
-  \${APP_NAME} → $base_name
-  \$file → $file
-
-NO dejes placeholders sin resolver.
-
-========================
-ESTÁNDARES OBLIGATORIOS
-========================
-
-Cada workflow debe incluir:
+Every workflow MUST include:
 
 permissions:
   contents: read
@@ -213,55 +213,61 @@ concurrency:
 
 timeout-minutes: 30
 
-Uso de:
+If matrix is used:
+strategy:
+  fail-fast: false
+
+Always include:
+
 - actions/checkout@v4
-- setup tools oficiales
-- cache optimizado por hashFiles
-- strategy.matrix si aplica
-- workflow_call cuando sea reusable
+- Official setup-* actions
+- actions/cache using hashFiles
+- Proper error handling
+- Retry logic if appropriate
+- Minimal required permissions
+- Branch protection logic if applicable
 
-========================
-SALIDA EJEMPLO (FORMATO)
-========================
+========================================
+SECURITY RULES
+========================================
 
-##FILE: .github/actions/$base_name/action.yml
-name: $base_name
-description: Composite action for $base_name
-runs:
-  using: composite
-  steps:
-    - name: Execute logic
-      shell: bash
-      run: echo \"Running $base_name\"
+✘ Never hardcode secrets
+✘ Never leave Jenkins references
+✘ Never leave unresolved placeholders
+✘ Never generate incomplete YAML
+✘ Never embed reusable logic if it can be extracted
 
----ARCHIVO_SEPARATOR---
+========================================
+VARIABLE REPLACEMENT (MANDATORY)
+========================================
 
-##FILE: .github/workflows/${base_name}.yml
-name: ${base_name}
-on:
-  workflow_call:
-    inputs:
-      environment:
-        required: true
-        type: string
+Replace completely:
 
-permissions:
-  contents: read
+  \${FILE_NAME} → $base_name
+  \${APP_NAME} → $base_name
+  \$file → $file
 
-concurrency:
-  group: ${base_name}-\${{ github.ref }}
-  cancel-in-progress: true
+No unresolved variables allowed.
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
+========================================
+OUTPUT FORMAT (STRICT)
+========================================
 
-========================
+1) Each file MUST begin with:
+   ##FILE: path/to/file.yml
 
-Contenido a convertir:
+2) If multiple files are generated, separate them EXACTLY with:
+
+   ---ARCHIVO_SEPARATOR---
+
+3) Output ONLY valid YAML.
+4) No explanations.
+5) Production-ready syntax.
+6) Each YAML must be complete and functional.
+
+========================================
+
+Content to convert:
 $content
 "
 
