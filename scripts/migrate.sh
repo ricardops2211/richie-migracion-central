@@ -1,3 +1,4 @@
+```shellscript
 #!/usr/bin/env bash
 set -uo pipefail
 
@@ -102,7 +103,7 @@ REGLAS:
 7. Secrets: Usa secrets context, agrega TODO.
 8. Incluye cache, retries, error handling.
 9. Maneja stages/parallel/tools/post.
-10. YAML válido y completo. Sin explicaciones.
+10. YAML válido y completo. Sin explicaciones. SOLO genera YAML válido para GHA. NO generes archivos Groovy u otros.
 
 Contenido:
 $content"
@@ -153,24 +154,38 @@ $content"
 
     # Procesar salida
     safe_name=$(echo "$base_name" | sed 's/[^a-zA-Z0-9._-]/_/g')
-    output_dir="$OUTPUT_BASE/$safe_name"
-    mkdir -p "$output_dir"
+    output_dir="$OUTPUT_BASE/.github"  # Aplanar: Todo en .github/
+    mkdir -p "$output_dir/workflows" "$output_dir/actions"
 
     temp_file=$(mktemp)
     echo "$generated" > "$temp_file"
 
     current_file=""
     content=""
+    generated_files=()  # Array para trackear y evitar duplicados
     while IFS= read -r line || [ -n "$line" ]; do
       if [[ "$line" == "---ARCHIVO_SEPARATOR---" ]] || [[ "$line" =~ ^##FILE: ]]; then
         if [ -n "$current_file" ]; then
-          target_path="$output_dir/$current_file"
-          mkdir -p "$(dirname "$target_path")"
-          echo "$content" > "$target_path"
-          if ! grep -qE "^(name|on|jobs):" "$target_path"; then
-            echo "Warning: YAML inválido en $current_file para $file" >> "$error_log"
+          # Validación estricta: Solo guarda si parece YAML válido
+          if grep -qE "^(name|on|jobs):" <<< "$content"; then
+            # Ajusta path para aplanar: e.g., workflows/$safe_name-$current_file si es workflow
+            if [[ "$current_file" =~ workflows ]]; then
+              target_path="$output_dir/workflows/${safe_name}-${current_file##*/}"
+            else
+              target_path="$output_dir/actions/${safe_name}-${current_file##*/}"
+            fi
+            # Evita duplicados
+            if [[ ! " ${generated_files[*]} " =~ " ${target_path} " ]]; then
+              mkdir -p "$(dirname "$target_path")"
+              echo "$content" > "$target_path"
+              generated_files+=("$target_path")
+              echo "    ✓ ${target_path##$OUTPUT_BASE/}"
+            else
+              echo "    Skip duplicado: $current_file"
+            fi
+          else
+            echo "Warning: YAML inválido, no guardando $current_file para $file" >> "$error_log"
           fi
-          echo "    ✓ $current_file"
         fi
         if [[ "$line" =~ ^##FILE: ]]; then
           current_file="${line#*##FILE: }"
@@ -182,18 +197,33 @@ $content"
     done < "$temp_file"
     # Guardar el último si existe
     if [ -n "$current_file" ]; then
-      target_path="$output_dir/$current_file"
-      mkdir -p "$(dirname "$target_path")"
-      echo "$content" > "$target_path"
-      if ! grep -qE "^(name|on|jobs):" "$target_path"; then
-        echo "Warning: YAML inválido en $current_file para $file" >> "$error_log"
+      if grep -qE "^(name|on|jobs):" <<< "$content"; then
+        if [[ "$current_file" =~ workflows ]]; then
+          target_path="$output_dir/workflows/${safe_name}-${current_file##*/}"
+        else
+          target_path="$output_dir/actions/${safe_name}-${current_file##*/}"
+        fi
+        if [[ ! " ${generated_files[*]} " =~ " ${target_path} " ]]; then
+          mkdir -p "$(dirname "$target_path")"
+          echo "$content" > "$target_path"
+          generated_files+=("$target_path")
+          echo "    ✓ ${target_path##$OUTPUT_BASE/}"
+        else
+          echo "    Skip duplicado: $current_file"
+        fi
+      else
+        echo "Warning: YAML inválido, no guardando $current_file para $file" >> "$error_log"
       fi
-      echo "    ✓ $current_file"
     fi
     rm "$temp_file"
 
-    ((processed++))
-    sleep "$RATE_LIMIT_DELAY"  # Pausa solo después de éxito
+    if [ ${#generated_files[@]} -gt 0 ]; then
+      ((processed++))
+      sleep "$RATE_LIMIT_DELAY"  # Pausa solo después de éxito
+    else
+      echo "No generado para $file" >> "$error_log"
+      ((failed++))
+    fi
   else
     echo "No generado para $file" >> "$error_log"
     ((failed++))
@@ -225,3 +255,4 @@ jq -n --arg total "$file_count" --arg success "$processed" --arg fail "$failed" 
 find "$OUTPUT_BASE" -type f | head -30 | sed 's/^/  /'
 
 exit 0
+```
